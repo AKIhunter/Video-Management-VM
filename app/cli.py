@@ -4,11 +4,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Windows 控制台默认 GBK，直接 print 日文/特殊字符会抛 UnicodeEncodeError，
-# 统一把标准输出切成 UTF-8（无法 reconfigure 时静默降级）。
+# Windows 控制台默认 GBK，直接 print 日文/特殊字符会抛 UnicodeEncodeError。
+# 注意：这里**只放宽错误处理、不强行改编码** —— 若把 stdout 切成 UTF-8，
+# 中文 Windows 控制台（代码页 936）会把中文显示成乱码。
 try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
 except Exception:
     pass
 

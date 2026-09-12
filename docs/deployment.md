@@ -70,12 +70,15 @@ powershell -ExecutionPolicy Bypass -File run.ps1 -Python "D:\Python311\python.ex
 powershell -ExecutionPolicy Bypass -File run.ps1 -CheckOnly
 ```
 
-> ⚠️ **两个必知的坑**
+> ⚠️ **三个必知的坑**
 > 1. **依赖只装在其中一个 Python 里**：直接 `python -m uvicorn ...` 很可能命中没装依赖的那个，报
 >    `ModuleNotFoundError: No module named 'fastapi'`。请用 `run.ps1`，或显式指定解释器。
 > 2. **`.ps1` 必须是 UTF-8 with BOM**：Windows PowerShell 5.1 读取**无 BOM** 的脚本时按系统 ANSI(GBK) 解码，
 >    脚本里的中文会乱码并破坏引号配对，直接报「字符串缺少终止符」而跑不起来。
 >    本仓库 `run.ps1` 已带 BOM，**修改后请保持 BOM**（VS Code 右下角编码选 “UTF-8 with BOM”）。
+> 3. **`.bat` 必须 CRLF 换行 + 纯 ASCII 输出**：LF 换行的批处理会被 cmd 当成一整行处理，
+>    症状是**双击后窗口一闪而过、没有任何输出**；而 `chcp 65001` 配合非 ASCII 文本在切换代码页时
+>    也容易解析出错。因此 `run.bat` 刻意保持「CRLF + 英文提示」，**中文提示统一由 `run.ps1` 输出**。
 
 ### 5. 配置文件（config.json）
 

@@ -1,12 +1,21 @@
 @echo off
-rem 视频管理器 · 一键启动（Windows 双击即用）
-rem 内部调用同目录的 run.ps1，并把输出保留在窗口里。
-chcp 65001 >nul
+rem ==========================================================
+rem  Video Manager - Windows one-click launcher
+rem  It simply calls run.ps1 (same folder), which does the real
+rem  work and prints all messages.
+rem
+rem  IMPORTANT: keep this file CRLF + pure ASCII.
+rem  LF-only line endings break cmd parsing (window closes at once),
+rem  and non-ASCII text can break under a non-matching code page.
+rem ==========================================================
 cd /d "%~dp0"
+title Video Manager
 
-echo 正在启动 视频管理器 ...
+echo [Video Manager] starting ...
+echo.
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run.ps1" %*
 
 echo.
-echo 服务已退出。按任意键关闭窗口。
-pause >nul
+echo [Video Manager] service stopped. Press any key to close this window.
+pause
