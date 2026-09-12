@@ -142,5 +142,15 @@ try {
 }
 if ($Port -gt 0) { $bindPort = $Port }
 
+# 端口占用检测：服务可能已经在跑，提前说明，避免被误判成「启动失败」
+$busy = Get-NetTCPConnection -LocalPort $bindPort -State Listen -ErrorAction SilentlyContinue
+if ($busy) {
+    Say "[!] 端口 $bindPort 已经被占用 —— 服务很可能已经在运行了。" "Yellow"
+    Say "    直接访问： http://${bindHost}:${bindPort}" "Gray"
+    Say "    需要重启时，先结束旧进程再执行本脚本：" "Gray"
+    Say "    Get-NetTCPConnection -LocalPort $bindPort -State Listen | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id `$_ -Force }" "Gray"
+    exit 1
+}
+
 Say "[4/4] 启动服务： http://${bindHost}:${bindPort}    (Ctrl+C 退出)" "Green"
 & $pyExe -m uvicorn app.main:app --host $bindHost --port $bindPort
