@@ -1,0 +1,60 @@
+# ============================================================
+#  视频管理器 · .gitignore
+#  原则：**数据、缓存、日志、本机配置一律不入库**，只提交源码与文档。
+# ============================================================
+
+# ---------- 1. 敏感数据：本机配置与数据库 ----------
+config.json
+library.db
+library.db-wal
+library.db-shm
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 个人导出数据（标签字典 / 关联表快照）
+tags_export*.json
+tags_export*.txt
+tags_backup*.csv
+media_tags_backup*.csv
+
+# ---------- 2. 运行时生成目录（保留各自 README 作为说明） ----------
+frames_cache/*
+!frames_cache/README.md
+cover_cache/*
+!cover_cache/README.md
+logs/*
+!logs/README.md
+backups/*
+!backups/README.md
+
+# ---------- 3. Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---------- 4. 编辑器 / 操作系统 ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 5. 工具 / 临时产物 ----------
+.workbuddy/
+scratch/
+tmp/
+*.tmp
+*.bak
+*.log

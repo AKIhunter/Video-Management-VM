@@ -1,0 +1,14 @@
+{
+  "roots": ["D:\\MediaLibrary"],
+  "category_filter": ["视频"],
+  "db_path": "D:\\MediaLibrary\\视频管理器\\library.db",
+  "host": "127.0.0.1",
+  "port": 8080,
+  "memory_guard_bytes": 2147483648,
+  "default_player_open": true,
+  "default_user_id": 1,
+  "ffmpeg_path": "",
+  "frames_dir": "frames_cache",
+  "log_level": "INFO",
+  "log_dir": "logs"
+}

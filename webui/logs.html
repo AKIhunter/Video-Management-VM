@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>消息日志 · 视频管理器</title>
+<style>
+:root{--bg:#0f1217;--panel:#161a22;--panel2:#1c212b;--line:#262c38;--txt:#eceae6;--muted:#98a1b1;--accent:#ff5c8a;--good:#2fd48f;--warn:#ffb26b;--bad:#8aa0ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:linear-gradient(180deg,#0b0e13,#0f1217);color:var(--txt);
+  font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;min-height:100vh;padding:20px}
+.bar{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.bar a{color:var(--muted);text-decoration:none;font-size:13px}
+.bar h1{font-size:17px;font-weight:800;flex:1}
+.bar h1:before{content:"◆";color:var(--accent);margin-right:6px}
+.btn{display:inline-flex;align-items:center;background:var(--panel2);border:1px solid var(--line);
+  color:var(--txt);padding:7px 14px;border-radius:9px;cursor:pointer;font-size:13px;text-decoration:none}
+.btn:hover{border-color:var(--accent);color:#fff}
+.btn.primary{background:linear-gradient(120deg,#d93a66,#ff5c8a);border:none;color:#fff;font-weight:600}
+.muted{color:var(--muted)}
+#list{max-width:860px;margin:0 auto}
+.n-item{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;cursor:pointer;transition:.15s}
+.n-item:hover{border-color:#3a4250}
+.n-item.unread{border-left:3px solid var(--accent)}
+.n-item.expand .n-body{display:block}
+.n-head{display:flex;align-items:center;gap:10px;font-size:13.5px}
+.n-type{font-size:11px;font-weight:700;padding:1px 7px;border-radius:5px}
+.n-type.task_done{background:#0f2f22;color:var(--good)}
+.n-type.task_canceled{background:#3a2f12;color:var(--warn)}
+.n-type.task_error{background:#3a1a20;color:#ff8fa5}
+.n-type.info{background:#232a3a;color:#aecbff}
+.n-title{font-weight:600;flex:1}
+.n-time{color:var(--muted);font-size:11.5px}
+.n-body{display:none;margin-top:10px;background:#0b0e13;border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace;color:#bfe6d2;
+  white-space:pre-wrap;line-height:1.6}
+.n-ops{margin-top:8px;display:flex;gap:10px;font-size:11.5px}
+.n-ops a{color:var(--accent);text-decoration:none}
+.empty{text-align:center;color:var(--muted);padding:60px 0;font-size:14px}
+.n-item.flash{animation:flash 1.2s ease}
+@keyframes flash{0%{box-shadow:0 0 0 2px var(--accent)}100%{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="index.html">← 返回</a>
+  <h1>消息日志</h1>
+  <button class="btn" onclick="readAll()">全部已读</button>
+  <button class="btn" onclick="load()">刷新</button>
+</div>
+<div id="list"></div>
+<script>
+async function api(url, opts){const r=await fetch(url,Object.assign({},opts));if(!r.ok)throw new Error((await r.json()).detail||r.status);return r.json();}
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+let _items=[];
+async function load(){
+  const box=document.getElementById("list");
+  box.innerHTML='<div class="muted">加载中…</div>';
+  try{const d=await api("/api/admin/notifications?limit=200");_items=d.items||[];}
+  catch(e){box.innerHTML='<div class="muted">加载失败：'+esc(e.message)+'</div>';return;}
+  if(!_items.length){box.innerHTML='<div class="empty">暂无消息日志</div>';return;}
+  const params=new URLSearchParams(location.search);
+  const focusId=params.get("id")?Number(params.get("id")):null;
+  box.innerHTML=_items.map(n=>`
+    <div class="n-item${n.is_read?"":" unread"}" id="n-${n.id}" onclick="toggle(${n.id})">
+      <div class="n-head">
+        <span class="n-type ${esc(n.type)}">${esc(n.type||"info")}</span>
+        <span class="n-title">${esc(n.title)}</span>
+        <span class="n-time">${esc(n.created_at||"")}${n.is_read?"":" · 未读"}</span>
+      </div>
+      <div class="n-body" id="b-${n.id}">${esc(n.body||"(无详细日志)")}</div>
+      <div class="n-ops">
+        ${n.is_read?"":`<a href="#" onclick="event.stopPropagation();markRead(${n.id});return false;">标记已读</a>`}
+      </div>
+    </div>`).join("");
+  if(focusId){const el=document.getElementById("n-"+focusId);if(el){el.classList.add("expand","flash");el.scrollIntoView({behavior:"smooth",block:"center"});}}
+}
+function toggle(id){const el=document.getElementById("n-"+id);if(el)el.classList.toggle("expand");}
+async function markRead(id){await api(`/api/admin/notifications/${id}/read`,{method:"POST"});load();}
+async function readAll(){await api("/api/admin/notifications/read-all",{method:"POST"});load();}
+load();
+</script>
+</body>
+</html>

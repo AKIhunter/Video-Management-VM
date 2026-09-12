@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频管理器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="sticky-top">
+<header class="topbar">
+  <div class="brand">视频管理器</div>
+  <div class="search">
+    <input id="q" placeholder="搜索标题 / 制作组 / 索引id…" oninput="app.debounce()">
+  </div>
+  <button class="btn filter-toggle" id="filterToggle" onclick="app.toggleFilters()" title="展开 / 收缩筛选栏">筛选 ▾</button>
+  <div class="top-actions">
+    <span class="stats-chip" id="statChip">…</span>
+    <div class="notif-wrap">
+      <button class="btn notif-btn" id="notifBtn" onclick="app.toggleNotif(event)" title="消息通知">🔔<span class="notif-dot" id="notifDot"></span></button>
+      <div class="notif-panel" id="notifPanel">
+        <div class="notif-head">消息中心
+          <button class="btn ghost x" onclick="app.closeNotif()">✕</button>
+          <button class="btn" onclick="app.notifReadAll()">全部已读</button>
+        </div>
+        <div id="notifList" class="notif-list"></div>
+      </div>
+    </div>
+    <button class="btn" onclick="app.openAdmin()">白屏管理</button>
+  </div>
+</header>
+
+<div class="filters" id="filters">
+  <select id="fCat" onchange="app.apply()"><option value="">全部分类</option></select>
+  <select id="fStatus" onchange="app.apply()">
+    <option value="">全部状态</option><option>未看</option><option>想看</option><option>在看</option><option>看完</option>
+  </select>
+  <select id="fYear" onchange="app.onYearChange()"><option value="">全部年份</option></select>
+  <select id="fMonth" onchange="app.apply()"><option value="">全部月份</option></select>
+  <div class="tagfilter" id="fTagWrap">
+    <button class="btn" id="fTagBtn" onclick="app.toggleTagPanel(event)">标签筛选 ▾<span class="tagfilter-count" id="fTagCount">0</span></button>
+    <div class="tag-panel" id="fTagPanel">
+      <div class="tag-panel-head">
+        <b id="fTagTitle">标签筛选</b>
+        <span class="muted" id="fTagHint">多选 · 满足任一标签即显示（OR）</span>
+        <span class="tag-panel-ops">
+          <button class="btn" onclick="app.clearTagFilter()">清空</button>
+          <button class="btn primary" onclick="app.applyTagPicker()">应用</button>
+          <button class="btn ghost x" onclick="app.closeTagPanel()">✕</button>
+        </span>
+      </div>
+      <div class="tag-cols" id="fTagCols"></div>
+    </div>
+  </div>
+  <div class="selected-tags" id="fTagSelected" title="已选标签（满足任一即显示）">
+    <span class="muted">未选择标签</span>
+  </div>
+  <label class="min">≥<select id="fMin" onchange="app.apply()">
+    <option value="">不限</option><option>4.5</option><option>4</option><option>3</option><option>2</option>
+  </select></label>
+  <label class="fav"><input type="checkbox" id="fFav" onchange="app.apply()"> 只看收藏</label>
+  <select id="fSort" onchange="app.apply()">
+    <option value="score">按评分↓</option><option value="score_asc">按评分↑</option>
+    <option value="date_desc">按日期↓</option><option value="date_asc">按日期↑</option>
+    <option value="title">按标题 A→Z</option><option value="added">按入库↓</option>
+    <option value="fav">收藏优先↓</option><option value="fav_asc">未收藏优先↑</option>
+  </select>
+  <div class="pager">
+    <button class="btn" onclick="app.nav(-1)">上一页</button>
+    <span id="pageInfo"></span>
+    <button class="btn" onclick="app.nav(1)">下一页</button>
+    <select id="pageSize" onchange="app.changePageSize()" title="每页数量">
+      <option value="30">30条/页</option>
+      <option value="50">50条/页</option>
+      <option value="100">100条/页</option>
+    </select>
+  </div>
+</div>
+</div>
+
+<main id="grid" class="grid"></main>
+<div id="loadMore" class="sentinel"></div>
+
+<footer class="foot">
+  <span>本地速率索引 · SQLite WAL · Range 流式播放</span>
+  <button class="btn ghost" onclick="app.openManage()">管理中心</button>
+</footer>
+
+<!-- 详情抽屉 -->
+<div id="overlay" class="overlay" onclick="if(event.target===this)app.closeDetail()">
+  <aside id="drawer" class="drawer"></aside>
+</div>
+
+<!-- 白屏管理（运维） -->
+<div id="adminModal" class="modal">
+  <div class="modal-card wide">
+    <h3>白屏管理 <small class="muted">仅管理员可运维</small></h3>
+    <div class="admin-tabs">
+      <button class="tab on" data-tab="edit" onclick="app.adminTab('edit')">作品编辑</button>
+      <button class="tab" data-tab="manage" onclick="app.adminTab('manage')">作品管理</button>
+      <button class="tab" data-tab="complete" onclick="app.adminTab('complete')">联网补全</button>
+      <button class="tab" data-tab="scan" onclick="app.adminTab('scan')">扫描</button>
+      <button class="tab" data-tab="restart" onclick="app.adminTab('restart')">一键重启</button>
+      <button class="tab" data-tab="tags" onclick="app.adminTab('tags')">标签管理</button>
+      <button class="btn ghost x admin-close" onclick="app.closeAdmin()" title="关闭">✕</button>
+    </div>
+
+    <!-- 作品编辑：筛选 / 重置 / 下载 ID -->
+    <div class="admin-pane" id="ap-edit">
+      <div class="admin-search">
+        <input id="aQ" placeholder="关键词（标题 / 制作组 / 索引id）…">
+        <select id="aCategory" title="限定分类（与作品管理/首页筛选共用分类字典）">
+          <option value="">全部分类</option>
+        </select>
+        <select id="aCover">
+          <option value="">封面不限</option><option value="0">封面为空</option><option value="1">有封面</option>
+        </select>
+        <select id="aSyn">
+          <option value="">简介不限</option><option value="0">简介为空</option><option value="1">有简介</option>
+        </select>
+        <select id="aTagState">
+          <option value="">标签不限</option><option value="0">无标签</option><option value="1">有标签</option>
+        </select>
+        <input id="aTagKw" placeholder="标签关键字…">
+        <input id="aYearF" placeholder="年份" type="number">
+      </div>
+      <div class="admin-search-actions">
+        <button class="btn primary" onclick="app.adminSearch()">查询</button>
+        <button class="btn" onclick="app.adminReset()">重置</button>
+        <button class="btn" onclick="app.downloadIds()">下载索引ID.txt</button>
+      </div>
+      <div class="muted" id="aPickInfo" style="margin-bottom:6px">输入条件后点「查询」，或在下方选择作品。</div>
+      <select id="aPick" size="8" style="width:100%" onchange="app.adminLoad(this.value)"></select>
+
+      <form id="aForm" class="admin-form" style="display:none" onsubmit="event.preventDefault();app.adminSave()">
+        <input type="hidden" id="aId">
+
+        <div class="field-group">
+          <h4 class="field-group-title">基础信息</h4>
+          <div class="field-row">
+            <label class="field">索引ID <input id="aIdShow" disabled></label>
+            <label class="field">年份 <input id="aYear" type="number"></label>
+            <label class="field">发布日期 <input id="aDate"></label>
+          </div>
+          <label class="field full">标题 <input id="aTitle"></label>
+          <label class="field full">日文原题 <input id="aTitleJp"></label>
+          <label class="field full">制作组 <input id="aStudio"></label>
+        </div>
+
+        <div class="field-group">
+          <h4 class="field-group-title">评分与字幕</h4>
+          <div class="field-row">
+            <label class="field">评分 <input id="aRating" type="number" step="0.1" min="0" max="5"></label>
+            <label class="field">评分原文 <input id="aRatingRaw"></label>
+            <label class="field inline">有中文字幕 <input id="aSub" type="checkbox"></label>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <h4 class="field-group-title">简介与标签</h4>
+          <label class="field full">简介（≤500 字）<textarea id="aSynopsis" rows="2" maxlength="501" oninput="document.getElementById('aSynCount').textContent=this.value.length"></textarea>
+            <span class="muted" id="aSynCount">0</span>/500</label>
+          <label class="field full">标签（空格分隔，≤10 个）
+            <input id="aTags" placeholder="点击此输入框弹出标签选择气泡…" autocomplete="off"
+                   onclick="app.editTagsPick(event)"></label>
+        </div>
+
+        <div class="field-group">
+          <h4 class="field-group-title">文件与海报</h4>
+          <label class="field full">文件地址 <input id="aPath"></label>
+          <label class="field full">海报地址 <input id="aPoster"></label>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn" type="button" onclick="app.metaRefresh()">本作品联网补全候选</button>
+          <button class="btn primary" type="submit">保存</button>
+        </div>
+        <div id="candidate" class="candidate"></div>
+      </form>
+    </div>
+
+    <!-- 联网补全（整合：全量 / 按ID / 封面 / 人工审定 / 打标） -->
+    <div class="admin-pane" id="ap-complete" style="display:none">
+      <div class="c-sec">
+        <h4>A · 全量联网补全（简介 / 发布年月 / 标签）</h4>
+        <p class="muted">
+          【做什么】为缺少 发布时间年月 / 简介 / 标签 的作品联网补全（本地 → 百度 → sample 级联），
+          并以本机简评为无标签作品 fallback 打标；人工编辑过的字段永不覆盖。<br>
+          【范围】未上传索引ID = 补全所有缺失上述字段的作品；已上传 = 严格只补解析出的索引ID对应作品（含信息完整者，重点补标签）。<br>
+          【不做什么】不补封面（用 B 区）、不修改人工已编辑字段、不删除任何数据。<br>
+          【供 B 区使用】这里解析出的索引ID会被「B · 联网搜索封面」复用为执行范围，因此需要联网补封面时请先在此解析 ID。
+        </p>
+        <div class="admin-search">
+          <input type="file" id="idsFile" accept=".txt" style="flex:1" title="可选：上传 media_ids.txt 限定补全范围">
+          <button class="btn" onclick="app.parseIdsFile()">解析ID（可选）</button>
+          <button class="btn" onclick="app.clearIds()">清除已上传</button>
+          <button class="btn primary" id="completionStart" onclick="app.startCompletion()">开始补全</button>
+          <button class="btn danger" id="compCancelBtn" onclick="app.cancelCompletion()">终止</button>
+        </div>
+        <div class="muted" id="idsCount">尚未解析 ID 文件（不上传 = 全量缺失补全）</div>
+        <textarea id="idsList" rows="2" style="display:none" readonly></textarea>
+        <div class="bar" id="compBar"><div id="compFill"></div></div>
+        <pre id="completionResult"></pre>
+        <div class="muted" id="completionStatus">待机</div>
+      </div>
+
+      <div class="c-sec">
+        <h4>B · 封面补全</h4>
+        <p class="muted">
+          为历史作品的封面做一次补齐，多种方式可组合使用：<br>
+          ① <b>本地匹配</b>：匹配库内 海报 / 封面 / COVER / 预告 目录中的素材（可直接执行）；<br>
+          ② <b>联网搜索封面</b>：逐作品联网抓取下载 —— <b>必须先在 A 区解析出索引ID</b>才能执行
+          （① 作品编辑 → 下载索引ID.txt → ② 在 A 区选择该文件并点「解析ID」→ ③ 解析成功后再执行），
+          未解析时会提示步骤并阻止启动，避免误扫全库、耗时过长；<br>
+          ③ <b>指定目录补全</b>：人工填写一个本地目录，从该目录取图片与缺封面作品按标题匹配
+          （只记录路径引用，不复制/移动任何文件）；<br>
+          ④ <b>截图视频封面（标记）</b>：把作品标记为「用视频预览帧当封面」，前端实时取帧显示；
+          若取到的帧接近全黑，会自动抽一帧更明亮的；<br>
+          ⑤ <b>服务端抽帧</b>：用 <b>ffmpeg</b> 把已标记的作品抽帧落盘为小图（写回封面），
+          之后前端改走普通图片加载 —— <b>首屏加载更快（30 张 &lt;500ms）</b>，推荐对 ④ 标记过的作品执行。
+        </p>
+        <div class="admin-search">
+          <button class="btn primary" onclick="app.startCover()">① 本地匹配</button>
+          <button class="btn primary" onclick="app.startCoverOnline()">② 联网搜索封面</button>
+          <button class="btn danger" id="coverCancelBtn" onclick="app.cancelCover()">终止</button>
+        </div>
+        <div class="admin-search">
+          <input id="coverDirPath" placeholder="③ 指定目录：如 D:\...\某封面素材目录" style="flex:1">
+          <button class="btn" onclick="app.startCoverDir()">指定目录补全</button>
+        </div>
+        <div class="admin-search">
+          <button class="btn" onclick="app.startVideoFrameCover()">④ 截图视频封面（标记）</button>
+          <button class="btn" onclick="app.clearVideoFrameCover()">取消该标记</button>
+        </div>
+        <div class="admin-search">
+          <button class="btn primary" onclick="app.startFrameBackfill()">⑤ 服务端抽帧（ffmpeg 落盘小图）</button>
+          <span class="muted">仅对没有本地封面且已标记「视频预览帧」的作品生效。</span>
+        </div>
+        <div class="bar" id="coverBar"><div id="coverFill"></div></div>
+        <pre id="coverResult"></pre>
+        <div class="muted" id="coverStatus">待机</div>
+      </div>
+
+      <div class="c-sec">
+        <h4>C · 人工审定（双栏：左作品名列表 / 右候选修改区）</h4>
+        <p class="muted">
+          左栏点击作品名 → 右栏展示候选素材。**有效行为只有一种**：<b>点击右栏候选图片</b>（即选中该图），
+          左栏该行「待修改」会变为「已修改」。<br>
+          点「批量提交修改」提交全部已选图的行；成功后显示已完成，并<b>从左侧列表移除</b>。
+          右栏右上角（翻页左侧）另有「重搜…」（换关键词重新联网搜索）与「拒绝吗」（该候选不可用，移除该条）供单条处理。<br>
+          【刷新列表】按 <b>步骤 B「联网搜索封面」最近一次的范围</b>筛选待审定候选；【重置列表】只清空当前视图，
+          之后可再点「刷新列表」重新获取。
+        </p>
+        <div class="admin-search">
+          <button class="btn primary" onclick="app.loadReviews()">刷新列表</button>
+          <button class="btn" onclick="app.resetReviewList()">重置列表</button>
+          <span class="muted" id="reviewCount"></span>
+          <button class="btn primary" id="batchReviewBtn" onclick="app.batchAcceptReviews()">批量提交修改（0）</button>
+        </div>
+        <div class="muted" id="reviewScopeHint">—</div>
+        <div class="rev-two-pane">
+          <div class="rev-left" id="reviewLeftList"></div>
+          <div class="rev-right" id="reviewDetail"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 作品管理：分类增删改 + 按分类管理作品（移动 / 删索引） -->
+    <div class="admin-pane" id="ap-manage" style="display:none">
+      <p class="muted">
+        分类在此统一维护：与「扫描」的分类下拉、首页筛选栏的「全部分类」共用同一份分类数据，改名/新增会同步生效。<br>
+        【移动】把选中作品改到另一个分类（只改索引归属）；【删除】仅从项目里移除索引，<b>不会删除磁盘上的文件</b>。
+        列表支持按 <b>索引ID / 作品名称 / 标签</b> 模糊查询。
+      </p>
+      <div class="c-sec">
+        <h4>分类管理</h4>
+        <div class="admin-search">
+          <label class="field inline">当前分类
+            <select id="mgCategory"><option value="">全部分类</option></select>
+          </label>
+          <input id="mgNewCat" placeholder="新增分类名…" maxlength="40">
+          <button class="btn" onclick="app.createCategory()">新增分类</button>
+          <button class="btn" onclick="app.renameCategory()">重命名当前分类</button>
+          <button class="btn danger" onclick="app.deleteCategory()">删除当前分类</button>
+        </div>
+        <div class="muted" id="mgCatMsg">—</div>
+      </div>
+      <div class="c-sec">
+        <h4>作品列表</h4>
+        <div class="admin-search">
+          <input id="mgQ" placeholder="模糊查询：索引ID / 作品名称 / 标签…" style="flex:1"
+                 onkeydown="if(event.key==='Enter')app.manageSearch()">
+          <button class="btn primary" onclick="app.manageSearch()">查询</button>
+          <button class="btn" onclick="app.manageReset()">重置</button>
+        </div>
+        <div class="admin-search">
+          <button class="btn danger" onclick="app.manageDelete()">删除选中索引</button>
+          <button class="btn primary" onclick="app.manageTagPick(event)">批量打标签</button>
+          <label class="field inline">移动到
+            <select id="mgMoveTo"></select>
+          </label>
+          <button class="btn primary" onclick="app.manageMove()">执行移动</button>
+          <span class="muted" id="mgSelInfo">已选 0 部</span>
+          <span class="muted" id="mgPageInfo"></span>
+          <button class="btn" onclick="app.managePage(-1)">上一页</button>
+          <button class="btn" onclick="app.managePage(1)">下一页</button>
+        </div>
+        <div id="mgList"></div>
+      </div>
+    </div>
+
+    <!-- 扫描：路径引导 + 全盘防误操作 -->
+    <div class="admin-pane" id="ap-scan" style="display:none">
+      <p class="muted">扫描解析文件名并把海报 / 简评评分回填索引。全盘扫描按目录分块、可终止；也可只扫描指定路径文件夹。</p>
+      <div class="scan-guide">
+        <b>如何获取文件夹路径：</b>
+        <ol>
+          <li>打开资源管理器，进入目标文件夹；</li>
+          <li>点击顶部地址栏（显示路径的区域），按 <code>Ctrl+C</code> 复制；</li>
+          <li>或在文件夹内空白处 <code>Shift+右键</code> → 选择「复制为路径」；</li>
+          <li>把路径粘贴到下方输入框。</li>
+        </ol>
+      </div>
+      <div class="admin-search">
+        <label class="field inline">分类
+          <select id="scanCategory" title="选择分类后，本次扫描到的作品会记入该分类">
+            <option value="">自动（按目录名）</option>
+          </select>
+        </label>
+        <input id="scanPath" placeholder="指定路径文件夹（留空则需确认全盘扫描）…" style="flex:1">
+        <button class="btn primary" onclick="app.startScan()">开始扫描</button>
+        <button class="btn danger" id="scanCancelBtn" onclick="app.cancelScan()">终止</button>
+      </div>
+      <div id="fullScanConfirm" style="display:none" class="scan-confirm">
+        <div class="warn">⚠ 未填写路径，将执行<strong>全盘扫描</strong>：范围 = 配置的所有根目录（含 D:\MediaLibrary）。耗时可能较长，请确认数据盘已就绪。</div>
+        <label><input type="checkbox" id="fcCheck" onchange="document.getElementById('fcBtn').disabled=!this.checked"> 我已了解全盘扫描范围与耗时</label>
+        <button class="btn danger" id="fcBtn" disabled onclick="app.confirmFullScan()">确认全盘扫描</button>
+        <button class="btn ghost" onclick="app.hideFullScan()">取消</button>
+      </div>
+      <div class="bar" id="scanBar"><div id="barFill"></div></div>
+      <pre id="scanResult"></pre>
+      <div class="muted" id="scanProgressText">待机</div>
+    </div>
+
+    <!-- 一键重启 -->
+    <div class="admin-pane" id="ap-restart" style="display:none">
+      <p class="warn">重启会使修改（配置 / 元数据）快速生效，但会导致当前会话短暂中断。请谨慎操作。</p>
+      <p>请输入确认文本 <code>__RESTART__</code> 以解锁：</p>
+      <input id="rConfirm" placeholder="__RESTART__">
+      <div class="modal-actions">
+        <button class="btn danger" onclick="app.adminRestart()">确认一键重启</button>
+      </div>
+      <div id="rMsg" class="muted"></div>
+    </div>
+
+    <!-- 标签管理：增删改查 + 导出/导入 -->
+    <div class="admin-pane" id="ap-tags" style="display:none">
+      <p class="muted">管理全局标签：新增、改名、删除。删除标签会同步解除其与作品的关联。</p>
+      <div class="admin-search">
+        <input id="tagNew" placeholder="新标签名（≤20字）" maxlength="20">
+        <button class="btn primary" onclick="app.tagCreate()">新增标签</button>
+        <button class="btn" onclick="app.exportTags()">导出标签（id,标签值）</button>
+      </div>
+      <div class="c-sec">
+        <h4>导入标签（增量 / 覆盖）</h4>
+        <p class="muted">
+          文件格式为纯文本，<b>每行一条</b>：<code>id,标签值</code>（英文逗号分隔、换行分隔）；导出即该格式（<b>UTF-8 带 BOM</b>，Excel/记事本可直接正确打开），导入时由标签管理自行解析。<br>
+          【编码】导入按文件原始字节探测 UTF-8 / UTF-8-BOM / GBK / Big5，含乱码替换字符的文件会被直接拒绝，不会写入。<br>
+          【增量导入】只新增缺失标签，保留现有标签与全部作品关联；文件中的 id 未被占用则沿用，否则自动重新分配；<br>
+          【覆盖导入】需输入确认词 <code>__OVERWRITE__</code>，且服务端会先自动备份到 <code>backups/</code> 目录，再清空重建（文件不含关联，关联会被解除）；<br>
+          标签值统一去空白并按上限截断。
+        </p>
+        <div class="admin-search">
+          <input type="file" id="tagImportFile" accept=".csv,.txt,.json" style="flex:1">
+          <label class="field inline"><input type="radio" name="tagImportMode" value="merge" checked> 增量导入</label>
+          <label class="field inline"><input type="radio" name="tagImportMode" value="overwrite"> 覆盖导入</label>
+          <button class="btn primary" onclick="app.importTags()">开始导入</button>
+        </div>
+        <div class="muted" id="tagImportMsg">尚未导入</div>
+      </div>
+      <div class="c-sec">
+        <h4>标签恢复（误覆盖 / 乱码修复）</h4>
+        <p class="muted">
+          若曾用「覆盖导入」写入过编码错误的文件，可在此诊断与恢复：<br>
+          ①「诊断」只统计、不改数据；②「清理乱码标签」删除名称含乱码替换符的标签及其关联；
+          ③「按简评痕迹恢复」根据作品 meta 中留存的本机简评打标记录重建标签与关联；
+          ④「重跑简评打标（忽略人工保护）」按磁盘简评文本重新生成标签（会覆盖已标记为人工编辑的标签，仅恢复场景使用）。
+        </p>
+        <div class="admin-search">
+          <button class="btn" onclick="app.tagsRecoverDiag()">诊断（只读）</button>
+          <button class="btn danger" onclick="app.tagsRecoverRun(['drop_garbled'])">清理乱码标签</button>
+          <button class="btn primary" onclick="app.tagsRecoverRun(['restore_meta'])">按简评痕迹恢复</button>
+          <button class="btn" onclick="app.startTagsBackfillForce()">重跑简评打标（忽略人工保护）</button>
+        </div>
+        <div class="muted" id="tagRecoverMsg">—</div>
+      </div>
+      <div id="tagAdminList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 管理中心（用户 / 用户组，占位） -->
+<div id="manageModal" class="modal">
+  <div class="modal-card wide">
+    <h3>管理中心 <small class="muted">用户与用户组管理（预留）</small></h3>
+    <div class="admin-tabs">
+      <button class="tab on" data-tab="users" onclick="app.manageTab('users')">用户管理</button>
+      <button class="tab" data-tab="groups" onclick="app.manageTab('groups')">用户组管理</button>
+      <button class="btn ghost x admin-close" onclick="app.closeManage()" title="关闭">✕</button>
+    </div>
+    <div class="admin-pane" id="mp-users">
+      <p class="muted">当前为只读列表；用户/用户组的增删改、组内权限与批量授权将随登录体系一并开放。</p>
+      <table id="userList" class="user-table">
+        <thead><tr><th>ID</th><th>名称</th><th>角色</th><th>创建时间</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="admin-pane" id="mp-groups" style="display:none">
+      <p class="muted">规划中：后续支持用户组创建、成员维护与按组授权。</p>
+      <div class="empty">暂无用户组</div>
+    </div>
+  </div>
+</div>
+
+<!-- 删除标签防误触 -->
+<div id="tagDeleteModal" class="modal">
+  <div class="modal-card">
+    <h3>删除标签 · 防误触确认</h3>
+    <p class="warn" id="tdWarn"></p>
+    <p>标签名称：<span class="tag-chip" id="tdName"></span></p>
+    <p class="muted">此操作不可恢复。请输入该标签名（完全一致）以解锁删除按钮：</p>
+    <input id="tdInput" autocomplete="off" oninput="app.tagDeleteCheck()"
+           onkeydown="if(event.key==='Enter'&&!document.getElementById('tdBtn').disabled)app.tagDeleteConfirm()">
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="app.closeTagDelete()">取消</button>
+      <button class="btn danger" id="tdBtn" disabled onclick="app.tagDeleteConfirm()">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
