@@ -36,14 +36,48 @@ Pillow>=10.0            # 图片像素分析（抽帧亮度判定 + 联网封面
 服务端「⑤ 服务端抽帧」依赖 ffmpeg，来源二选一：
 
 1. **imageio-ffmpeg（推荐，默认）**：`pip install imageio-ffmpeg` 后自动捆绑 ffmpeg 二进制，**无需手动安装**。
-2. **系统安装 ffmpeg（可选）**：手动装好后在 `config.json` 里填 `"ffmpeg_path": "D:\\tools\\ffmpeg.exe"`，程序优先使用它。
+2. **系统安装 ffmpeg（可选）**：手动装好后在 `config.json` 里填 `"ffmpeg_path": "C:\\...\\ffmpeg.exe"`，程序优先使用它。
 
 > ⚠️ **关键注意**：项目可能被多个 Python 环境启动（系统 Python / managed Python / IDE 内置 Python 等）。
 > 依赖必须装到**实际启动服务所用的那个 Python** 里。若抽帧全部失败并报
 > `ModuleNotFoundError: No module named 'imageio_ffmpeg'`，说明依赖装错了 Python 环境，
 > 请用启动服务的同一个 `python -m pip install -r requirements.txt` 重装。
 
-### 4. 配置文件（config.json）
+### 4. 一键启动脚本与环境自检
+
+推荐用仓库自带脚本启动，它会**自动挑出装了依赖的那个 Python**，避免「多 Python 环境装错依赖」这一经典问题。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File run.ps1      # Windows（或双击 run.bat）
+./run.sh                                              # macOS / Linux
+```
+
+**解释器查找顺序**（找到「能 import fastapi, uvicorn」的即止）：
+`-Python` 参数 → 环境变量 `VM_PYTHON` → 项目根 `.python-path`（一行绝对路径）→ `.venv\Scripts\python.exe` → PATH 中的 `python` / `python3` → `%LOCALAPPDATA%\Programs\Python\Python*`。
+若全都没装依赖，则用 PATH 里的 `python` 安装 `requirements.txt` 后重试。
+
+**指定解释器**（多 Python 机器上建议固定下来）：
+
+```powershell
+# 方式 A：命令行传参
+powershell -ExecutionPolicy Bypass -File run.ps1 -Python "D:\Python311\python.exe"
+# 方式 B：在项目根建 .python-path 文件，写入解释器绝对路径（已在 .gitignore 中，不会提交）
+```
+
+**只自检、不启动**（排查问题时先跑这个，会依次验证解释器 / 依赖 / 配置 / 数据库）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File run.ps1 -CheckOnly
+```
+
+> ⚠️ **两个必知的坑**
+> 1. **依赖只装在其中一个 Python 里**：直接 `python -m uvicorn ...` 很可能命中没装依赖的那个，报
+>    `ModuleNotFoundError: No module named 'fastapi'`。请用 `run.ps1`，或显式指定解释器。
+> 2. **`.ps1` 必须是 UTF-8 with BOM**：Windows PowerShell 5.1 读取**无 BOM** 的脚本时按系统 ANSI(GBK) 解码，
+>    脚本里的中文会乱码并破坏引号配对，直接报「字符串缺少终止符」而跑不起来。
+>    本仓库 `run.ps1` 已带 BOM，**修改后请保持 BOM**（VS Code 右下角编码选 “UTF-8 with BOM”）。
+
+### 5. 配置文件（config.json）
 
 首次部署前编辑 `config.json`（或 `config.example.json` 复制改名）：
 

@@ -4,7 +4,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import config, db, scanner
+# Windows 控制台默认 GBK，直接 print 日文/特殊字符会抛 UnicodeEncodeError，
+# 统一把标准输出切成 UTF-8（无法 reconfigure 时静默降级）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+from app import config, db
+from app.services import scanner
 
 
 def cmd_init(_args):
@@ -34,7 +43,7 @@ def cmd_scan(args):
 
 def cmd_tags_restore(args):
     """按导出文件还原 media_tags 关联（只重建 id 关联，不写入标签值）。"""
-    from app.tag_restore import restore_from_file
+    from app.services.tag_restore import restore_from_file
 
     stat = restore_from_file(args.file, dry_run=not args.apply)
     mode = "已写入" if args.apply else "试运行（未写库，加 --apply 才执行）"

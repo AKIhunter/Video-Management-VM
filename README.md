@@ -34,6 +34,9 @@ powershell -ExecutionPolicy Bypass -File run.ps1
 也可以直接双击 `run.bat`（内部同样是调 `run.ps1`）。
 跨平台（macOS / Linux）用 `./run.sh`。
 
+> 启动脚本会**自动挑选「已装依赖」的 Python 解释器**（多 Python 环境的必踩坑）；
+> 只想先做环境自检不启动服务，加 `-CheckOnly`。详见 [docs/deployment.md](docs/deployment.md#4-一键启动脚本与环境自检)。
+
 启动后打开 <http://localhost:8080>。v1 为单用户免登录，默认管理员 `admin`。
 
 ### 命令行（可选）
