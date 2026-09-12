@@ -39,6 +39,17 @@ powershell -ExecutionPolicy Bypass -File run.ps1
 
 启动后打开 <http://localhost:8080>。v1 为单用户免登录，默认管理员 `admin`。
 
+### 停止服务
+
+```powershell
+# 双击 stop.bat，或：
+powershell -ExecutionPolicy Bypass -File stop.ps1          # 会列出进程并让你确认
+powershell -ExecutionPolicy Bypass -File stop.ps1 -Force   # 跳过确认
+```
+
+脚本按 `config.json` 里的**端口**定位进程（不会误杀你 IDE 里的 Python），结束后自动校验端口是否释放。
+其它方式与原理详见 [docs/deployment.md](docs/deployment.md#停止服务windows)。
+
 ### 命令行（可选）
 
 ```powershell

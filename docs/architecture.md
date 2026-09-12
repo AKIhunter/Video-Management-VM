@@ -92,7 +92,8 @@
 ├─ backups/             # 📖 导出快照（⚠️ 含标签文本，禁止提交，见目录内 README）
 ├─ config.example.json  # 配置模板；config.json 为开发者本机配置（不入库）
 ├─ requirements.txt
-└─ run.ps1 / run.bat / run.sh   # 一键启动脚本（三平台）
+└─ run.ps1 / run.bat / run.sh   # 一键启动（三平台）
+   stop.ps1 / stop.bat          # 一键停止（按端口定位进程，避免误杀其它 python）
 ```
 
 **分层依赖方向**（单向，避免循环）：`routers → services → core`，`services → db/config`，`core` 不依赖业务层。

@@ -136,11 +136,33 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8080
 
 ### 停止服务（Windows）
 
+**方式一：脚本（推荐）**
+
 ```powershell
-# 找到监听 8080 的进程并结束（pkill 在 Git Bash 下不可靠）
+# 双击 stop.bat，或：
+powershell -ExecutionPolicy Bypass -File stop.ps1
+# 跳过确认：
+powershell -ExecutionPolicy Bypass -File stop.ps1 -Force
+# 非默认端口：
+powershell -ExecutionPolicy Bypass -File stop.ps1 -Port 9000
+```
+
+`stop.ps1` 会从 `config.json` 读端口，列出正在监听该端口的进程并等你确认，结束后再校验端口是否真的释放。
+
+> 为什么按**端口**找而不是按进程名？`Get-Process python | Stop-Process` 会把你 IDE、其它脚本用的 Python 一起杀掉。按端口定位只动服务自己。
+
+**方式二：手动命令**
+
+```powershell
 Get-NetTCPConnection -LocalPort 8080 -State Listen | Select-Object -ExpandProperty OwningProcess -Unique |
   ForEach-Object { Stop-Process -Id $_ -Force }
 ```
+
+> `pkill` 在 Git Bash 下对原生 Windows 进程不可靠，不要用它。
+
+**方式三：前台运行时** —— 直接在跑服务的窗口里按 `Ctrl+C`，或关掉那个窗口。
+
+**方式四：任务管理器** —— 详细信息里找到监听 8080 的 `python.exe` 结束任务。
 
 ## 三、运行期产生的目录
 
