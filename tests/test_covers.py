@@ -1,4 +1,4 @@
-"""封面索引/匹配与文件夹年份派生的单元测试。"""
+﻿"""封面索引/匹配与文件夹年份派生的单元测试。"""
 import os
 import tempfile
 
@@ -31,7 +31,7 @@ def test_strip_tags_removes_bracket_studio_date():
 
 
 def test_strip_tags_new_format_zeroes_noise():
-    s = covers.strip_tags(" [220506][サンプル・ジェーン]テストのお勉強第2話学ぶより経験がしたいお年頃.chs.mp4")
+    s = covers.strip_tags("[220506][サンプル・ジェーン]テストのお勉強 第2話学ぶより経験がしたいお年頃.chs.mp4")
     assert "220506" not in s and "chs" not in s
     assert "テストのお勉強第話学ぶより経験がしたいお年頃" in s
 

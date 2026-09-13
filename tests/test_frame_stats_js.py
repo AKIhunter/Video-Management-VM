@@ -1,4 +1,4 @@
-"""视频帧封面「全黑判定 + 画面评分」启发式的回归测试。
+﻿"""视频帧封面「全黑判定 + 画面评分」启发式的回归测试。
 
 做法：从 webui/app.js 里抽出 frameStats() 源码，在 Node 中用合成像素跑断言，
 确保「全黑/接近全黑」会被识别（从而触发抽样换帧），且「有画面」的帧得分更高。
@@ -16,7 +16,6 @@ APP_JS = os.path.join(ROOT, "webui", "app.js")
 
 _NODE_CANDIDATES = [
     shutil.which("node"),
-    r"C:\Program Files\nodejs\node.exe",
     r"C:\Program Files\nodejs\node.exe",
 ]
 

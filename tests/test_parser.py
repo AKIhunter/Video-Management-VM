@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,7 +55,7 @@ def test_score_arrow_takes_final():
 
 
 def test_score_paren_note_takes_first():
-    # 采用第一个星组（画风扣星后的实际分 ★★ → 4 分）
+    # 采用第一个星组（对画风扣星后的实际分 ★★ → 4 分）
     assert parser.normalize_score("★★（如果未对画风产生排斥反应则★★★）") == 4.0
 
 
