@@ -12,7 +12,7 @@ app/
 ├─ cli.py             命令行入口：init / scan / tags-restore
 ├─ logging_setup.py   日志：控制台 + logs/app.log（按天滚动）
 ├─ core/              公共工具（无业务语义）
-├─ services/          业务逻辑（14 个模块，见 services/README.md）
+├─ services/          业务逻辑（17 个模块，见 services/README.md）
 └─ routers/           HTTP 接口层（见 routers/README.md）
 ```
 
@@ -40,6 +40,10 @@ app/
 - `SCHEMA` / `schema_sql()`：建表语句（**11 张表**，见下）。
 - `connect()`：`sqlite3` 连接，开启 **WAL**、`row_factory=Row`、`busy_timeout`。
 - `init()`：建表 + 轻量迁移。迁移方式是 `_columns()` 查现有列 + `_add_column()` 补列 —— **加字段就在 `init()` 里补一条迁移**。
+- `_migrate_rating_scale()`：**一次性**把评分量纲从 0~5 换算到 0~10（`rating_norm` 与 `personal_rating` 均 ×2、封顶 10），
+  以 `settings.rating_scale_v2` 为标记保证只跑一次；转换后按 `watch_state` 结算一次用户评分均值。
+- `recompute_rating_avg(con, ids=None)`：按 `watch_state` 重算 `media.rating_avg` / `rating_votes` / `rating_updated_at`
+  （业务上的调用时机在 `services/ratings.py`）。
 - `sync_categories()`：把 `media.category` 里出现过、但 `categories` 字典缺的分类补齐（幂等），保证「扫描可选分类 / 作品管理 / 筛选下拉」三处数据一致。
 - `get_setting()` / `set_setting()`：`settings` 键值表读写（如一键重启的随机 token）。
 - `write_lock()`：写操作全局锁，避免并发写冲突。
@@ -48,8 +52,10 @@ app/
 表清单：`users` `settings` `media` `media_fts` `tags` `media_tags` `watch_state` `scan_runs` `cover_reviews` `notifications` `categories`。
 
 ### `authz.py` — 权限
-- `current_user()`：v1 固定返回 `admin`；**要做多用户，只改这一个函数**（换成会话/token 解析），业务路由不用动。
-- `require_admin()`：管理员守卫依赖。
+- `current_user()`：按配置的 `default_user_id` 从 **`users` 表**取当前用户（含 `role`），**不再写死 admin**；
+  把该行改成 `role='user'` 即等价于「普通账号」，`require_admin` 会自动只读化对应功能。
+  **要做多用户，只改这一个函数**（换成会话/token 解析），业务路由不用动。
+- `require_admin()`：管理员守卫依赖。标签场景：新增接口用 `current_user`（谁都能加），删除接口用 `require_admin`（仅 admin）。
 
 ### `cli.py` — 命令行
 - `python -m app.cli init` → `cmd_init`

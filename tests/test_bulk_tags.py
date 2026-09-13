@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import db  # noqa: E402
-from app.services.tagdict import TAG_LIMIT  # noqa: E402
+from app.services.kinks import TAG_LIMIT  # noqa: E402
 from app.routers import admin  # noqa: E402
 
 

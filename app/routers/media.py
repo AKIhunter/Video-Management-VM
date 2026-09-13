@@ -6,14 +6,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from .. import config as cfg_mod
+from ..authz import current_user, require_admin
 from ..db import get_db
-from ..services.tagdict import TAG_LIMIT
+from ..services.kinks import TAG_LIMIT
 from ..services.metadata_provider import MAX_TAG_LEN
 from ..core.media_helpers import media_or_404
 
 router = APIRouter(prefix="/api", tags=["media"])
 
 STATUSES = {"未看", "想看", "在看", "看完"}
+
+# 有效评分：优先用户评分均值（0~10），无用户评分时回退历史/简评分（0~10）。
+# 列表排序 / 评分筛选 / 统计一律用它，保证「主界面展示的分数」与排序口径一致。
+EFF_RATING = "COALESCE(m.rating_avg, m.rating_norm)"
 
 
 class TagIn(BaseModel):
@@ -53,7 +58,7 @@ def _filters(q, category, year_from, year_to, month, studio, rating_min, status,
         where.append("m.studio = ?")
         params.append(studio)
     if rating_min is not None:
-        where.append("m.rating_norm >= ?")
+        where.append(f"{EFF_RATING} >= ?")
         params.append(rating_min)
     if status:
         where.append("ws.status = ?")
@@ -96,15 +101,15 @@ def list_media(
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
     order = {
-        "score": "m.rating_norm IS NULL, COALESCE(m.rating_norm,0) DESC",
-        "score_asc": "COALESCE(m.rating_norm,0) ASC",
+        "score": f"{EFF_RATING} IS NULL, COALESCE({EFF_RATING},0) DESC",
+        "score_asc": f"COALESCE({EFF_RATING},0) ASC",
         "date_desc": "m.publish_date DESC",
         "date_asc": "m.publish_date ASC",
         "title": "m.title COLLATE NOCASE ASC",
         "added": "m.created_at DESC",
-        "fav": "ws.favorite DESC, m.rating_norm IS NULL, COALESCE(m.rating_norm,0) DESC",
-        "fav_asc": "ws.favorite ASC, COALESCE(m.rating_norm,0) DESC",
-    }.get(sort, "m.rating_norm IS NULL, COALESCE(m.rating_norm,0) DESC")
+        "fav": f"ws.favorite DESC, {EFF_RATING} IS NULL, COALESCE({EFF_RATING},0) DESC",
+        "fav_asc": f"ws.favorite ASC, COALESCE({EFF_RATING},0) DESC",
+    }.get(sort, f"{EFF_RATING} IS NULL, COALESCE({EFF_RATING},0) DESC")
 
     total = con.execute(f"SELECT COUNT(*) FROM (SELECT m.id FROM media m LEFT JOIN watch_state ws ON ws.media_id=m.id AND ws.user_id=? {where_sql})",
                         [uid, *params]).fetchone()[0]
@@ -132,6 +137,10 @@ def media_detail(mid: int, user_id: int | None = None, con=Depends(get_db)):
     fav_cnt = con.execute(
         "SELECT COUNT(*) c FROM watch_state WHERE media_id=? AND favorite=1", (mid,)).fetchone()["c"]
     d["favorite_count"] = fav_cnt
+    # 详情页每次实时统计评分人数，避免均值结算延迟导致显示不一致
+    d["rating_votes"] = con.execute(
+        "SELECT COUNT(*) c FROM watch_state WHERE media_id=? AND personal_rating IS NOT NULL",
+        (mid,)).fetchone()["c"]
     return d
 
 
@@ -218,19 +227,20 @@ def list_tags(con=Depends(get_db)):
     return {"items": [dict(r) for r in rows]}
 
 
-@router.get("/tagdict")
-def list_tagdict():
+@router.get("/kinks")
+def list_kinks():
     """返回题材词典的规范 tag 列表（供详情抽屉添加标签时联想）。"""
-    from ..services.tagdict import TAG_ENTRIES
+    from ..services.kinks import KINK_ENTRIES
     seen = []
-    for _pat, tag in TAG_ENTRIES:
+    for _pat, tag in KINK_ENTRIES:
         if tag not in seen:
             seen.append(tag)
     return {"items": seen}
 
 
 @router.post("/media/{mid}/tags")
-def add_tag(mid: int, body: TagIn, con=Depends(get_db)):
+def add_tag(mid: int, body: TagIn, _u=Depends(current_user), con=Depends(get_db)):
+    """给作品加标签。**任何账号都可以增加**（登录用户均可）。"""
     media_or_404(con, mid)
     name = _normalize_tag(body.name)
     if not name:
@@ -249,7 +259,8 @@ def add_tag(mid: int, body: TagIn, con=Depends(get_db)):
 
 
 @router.delete("/media/{mid}/tags")
-def remove_tag(mid: int, body: TagIn, con=Depends(get_db)):
+def remove_tag(mid: int, body: TagIn, _u=Depends(require_admin), con=Depends(get_db)):
+    """删除作品标签。**仅 admin 可删**（普通账号只增不删）。"""
     media_or_404(con, mid)
     name = _normalize_tag(body.name)
     if name:
@@ -284,7 +295,9 @@ def stats(user_id: int | None = None, con=Depends(get_db)):
     fav = con.execute(
         "SELECT COUNT(*) c FROM media m JOIN watch_state ws ON ws.media_id=m.id AND ws.user_id=? WHERE ws.favorite=1",
         (uid,)).fetchone()["c"]
-    avg = con.execute("SELECT AVG(rating_norm) a, SUM(rating_norm IS NOT NULL) n FROM media WHERE rating_norm IS NOT NULL").fetchone()
+    avg = con.execute(
+        "SELECT AVG(COALESCE(rating_avg, rating_norm)) a, "
+        "SUM(COALESCE(rating_avg, rating_norm) IS NOT NULL) n FROM media").fetchone()
     tags = con.execute(
         "SELECT t.name, COUNT(mt.media_id) c FROM tags t "
         "JOIN media_tags mt ON mt.tag_id=t.id "
@@ -312,6 +325,10 @@ def serialize(r):
         "favorite": bool(r["favorite"]),
         "note": r["note"],
     }
+    # 有效评分（0~10）：有用户评分取均值，否则回退历史/简评分；两者都无则 None
+    avg = d.get("rating_avg")
+    d["rating_votes"] = d.get("rating_votes") or 0
+    d["rating_display"] = avg if avg is not None else d.get("rating_norm")
     # 封面模式：video_frame = 用视频预览帧当封面（前端直接渲染视频帧，不存储图片）
     try:
         d["cover_mode"] = (json.loads(d.get("meta") or "{}") or {}).get("cover_mode")

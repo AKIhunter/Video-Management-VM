@@ -68,14 +68,14 @@ def _iter_chunk(f, length):
 
 
 def guard_advice(media_row, cfg) -> dict:
-    """内存/远程守卫建议：大文件或远程场景给出处置方式。"""
+    """内存/远程守卫建议：**仅超过 2GB**（``memory_guard_bytes`` 默认 2147483648）的大文件建议本地播放。"""
     size = media_row["file_size"] or 0
     oversized = size > cfg.get("memory_guard_bytes", 2147483648)
     return {
         "oversized": bool(oversized),
         "file_exists": bool(media_row["file_path"] and os.path.exists(media_row["file_path"])),
         "size": size,
-        "advice": "建议在服务器本地打开，避免大文件流式占用内存" if oversized else "可直接流式在线播放",
+        "advice": "文件超过 2GB，建议本地播放，避免大文件流式占用内存" if oversized else "可直接流式在线播放",
     }
 
 
@@ -89,3 +89,64 @@ def open_local(path: str) -> bool:
     import webbrowser
     webbrowser.open("file:///" + path.replace("\\", "/"))
     return True
+
+# ---------------- 在线播放格式兼容 ----------------
+# 浏览器（Chromium 系）可直接播放的容器/编码
+NATIVE_EXTS = {".mp4", ".m4v", ".webm", ".mkv", ".mov", ".ogv", ".m4p"}
+# 浏览器基本播不了的格式 → 由服务端 ffmpeg 实时转码为可流式的分片 mp4
+TRANSCODE_EXTS = {".avi", ".wmv", ".flv", ".mpg", ".mpeg", ".rmvb", ".rm",
+                  ".vob", ".m2ts", ".ts", ".asf", ".divx", ".3gp"}
+
+
+def needs_transcode(path: str) -> bool:
+    """该文件是否需要服务端转码才能在浏览器播放（mkv/webm/mp4 等原生格式不需要）。"""
+    return os.path.splitext(path or "")[1].lower() in TRANSCODE_EXTS
+
+
+def stream_transcode(path: str, request: Request, cfg=None) -> Response:
+    """用 ffmpeg 实时转码（avi / wmv / rmvb 等 → 分片 mp4），边转边流。
+
+    - 转码为 H.264 + AAC、最长边 720p（veryfast），保证 CPU 可承受；
+    - 分片 mp4（``-movflags frag_keyframe+empty_mooc``）无需 moov 原子即可边下边播；
+    - 不支持拖动进度条（实时转码没有字节↔时间的映射），响应头显式声明 ``Accept-Ranges: none``；
+    - 客户端断开时立即杀掉 ffmpeg 子进程，避免僵尸进程占用 CPU。
+    """
+    from fastapi import HTTPException
+    from . import frames as frames_mod
+
+    exe = frames_mod.ffmpeg_exe(cfg)
+    if not exe:
+        raise HTTPException(500, "未找到 ffmpeg，无法转码该格式（可配置 config.ffmpeg_path）")
+    cmd = [
+        exe, "-hide_banner", "-loglevel", "error",
+        "-i", path,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+        "-vf", "scale=-2:720",
+        "-c:a", "aac", "-ac", "2",
+        "-f", "mp4", "-movflags", "frag_keyframe+empty_mooc",
+        "pipe:1",
+    ]
+    import subprocess
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def _gen():
+        try:
+            while True:
+                chunk = proc.stdout.read(512 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001 — 进程可能已自行退出
+                pass
+
+    return StreamingResponse(
+        _gen(),
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "none",
+            "X-Transcode": "1",
+            "Cache-Control": "no-store",
+        })

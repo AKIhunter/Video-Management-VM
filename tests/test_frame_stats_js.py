@@ -17,6 +17,7 @@ APP_JS = os.path.join(ROOT, "webui", "app.js")
 _NODE_CANDIDATES = [
     shutil.which("node"),
     r"C:\Program Files\nodejs\node.exe",
+    r"C:\Program Files\nodejs\node.exe",
 ]
 
 _JS_ASSERT = r"""

@@ -1,4 +1,4 @@
-"""联网封面补全：为磁盘上无封面图的作品，从互联网搜索并下载封面。
+﻿"""联网封面补全：为磁盘上无封面图的作品，从互联网搜索并下载封面。
 
 每部缺封面作品的处理流程：
   1. 关键词 = 日文原题（无则本地标题）
@@ -22,7 +22,7 @@ from io import BytesIO
 
 from .. import config as cfg_mod
 from .. import db
-from .metadata_provider import (UA, SampleResolver, extract_sample_results,
+from .metadata_provider import (UA, MediaDbResolver, extract_media_db_results,
                                 normalize_keyword)
 
 MIN_WH = 200          # 图片最小边长（过滤缩略图/图标/广告占位图）
@@ -95,14 +95,14 @@ def _clean_post_title(title: str) -> str:
     return t.strip()
 
 
-def _search_sample(keyword: str):
-    """sample 搜索一次，返回 (best_title, best_url, conf) 或 (None, None, 0)。"""
-    resolver = SampleResolver()
+def _search_media_db(keyword: str):
+    """media-db 搜索一次，返回 (best_title, best_url, conf) 或 (None, None, 0)。"""
+    resolver = MediaDbResolver()
     try:
         html_text = _fetch(resolver._search_url(keyword)).decode("utf-8", "ignore")
     except Exception:  # noqa: BLE001
         return None, None, 0.0
-    results = extract_sample_results(html_text)
+    results = extract_media_db_results(html_text)
     if not results:
         return None, None, 0.0
     kw = normalize_keyword(keyword)
@@ -182,7 +182,7 @@ def search_cover(media_row, keyword: str | None = None) -> dict:
     best_title = best_url = None
     best_conf = 0.0
     for kw in kws:
-        t, u, conf = _search_sample(kw)
+        t, u, conf = _search_media_db(kw)
         if u and conf > best_conf:
             best_title, best_url, best_conf = t, u, conf
     if not best_url:

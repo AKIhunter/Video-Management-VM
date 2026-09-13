@@ -30,7 +30,8 @@ def _mk_db(tmp_path, monkeypatch):
 
 
 def _add(con, mid, name):
-    return media.add_tag(mid, media.TagIn(name=name), con)
+    # _u 是鉴权占位（路由层由 Depends 注入），单元测试直接给个 admin 身份
+    return media.add_tag(mid, media.TagIn(name=name), _u={"id": 1, "role": "admin"}, con=con)
 
 
 def _tags(con):
@@ -327,7 +328,7 @@ def test_recover_dry_run_then_drop_garbled_and_restore_meta(tmp_path, monkeypatc
 
 def test_recover_restore_meta_respects_tag_limit(tmp_path, monkeypatch):
     import json as _json
-    from app.services.tagdict import TAG_LIMIT
+    from app.services.kinks import TAG_LIMIT
     con = _mk_db(tmp_path, monkeypatch)
     for i in range(TAG_LIMIT):
         _add(con, 1, f"已有{i}")

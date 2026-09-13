@@ -27,6 +27,33 @@ def _hash(size, mtime):
     return f"{size}:{int(mtime)}"
 
 
+DATA_DISK = "medialibrary"      # 数据盘根目录名（大小写不敏感比较）
+
+
+def source_group(path: str) -> str:
+    """「来源组」：按文件路径推导，写入 studio 字段（替换旧「制作组」语义）。
+
+    规则：``上级文件夹/本级文件夹``；上级文件夹是数据盘根（MediaLibrary）时仅记本级。
+    例：
+      D:\\MediaLibrary\\real_video\\real_video_202503\\a.mp4 → real_video/real_video_202503
+      D:\\MediaLibrary\\某分类\\b.mp4                        → 某分类
+    """
+    norm = (path or "").replace("/", "\\").strip().rstrip("\\")
+    if not norm:
+        return ""
+    # 传入文件路径 → 取其所在目录；传入目录路径（无扩展名）→ 直接用
+    dirpath = os.path.dirname(norm)
+    if not os.path.splitext(os.path.basename(norm))[1]:
+        dirpath = norm
+    folder = os.path.basename(dirpath)
+    parent = os.path.basename(os.path.dirname(dirpath))
+    if not folder:
+        return ""
+    if not parent or parent.lower() == DATA_DISK:
+        return folder
+    return f"{parent}/{folder}"
+
+
 
 
 def _iter_chunks(roots):
@@ -58,11 +85,13 @@ def _scope_roots(cfg, scope, path):
 
 
 def do_scan(cfg=None, dry_run=False, progress=None, scope="full", path=None, stop=None,
-            category_override=None):
+            category_override=None, stage=None):
     """扫描建索引。
 
     category_override：指定分类时，本次扫描到的作品一律记入该分类（不再按目录名推断），
     且不受 category_filter 限制（用户显式指定即为准）。
+    stage：传入 list 时，``dry_run=True`` 的扫描会把「新增 / 有变化」的候选（**不写库**）
+    收集进该列表，供「扫描 → 人工确认 → 导入」两段式流程使用。
     """
     cfg = cfg or cfg_mod.load()
     filter_cats = set(cfg["category_filter"])
@@ -138,7 +167,8 @@ def do_scan(cfg=None, dry_run=False, progress=None, scope="full", path=None, sto
                     "category": category,
                     "title": meta["title"] or os.path.basename(path_),
                     "title_jp": meta.get("title_jp"),
-                    "studio": meta.get("studio"),
+                    # 「来源组」（上级文件夹/本级文件夹，替换旧「制作组」语义；由扫描自动生成）
+                    "studio": source_group(path_),
                     "publish_date": meta.get("publish_date") or derived.get("publish_date"),
                     "year": meta.get("year") or derived.get("year"),
                     "subtitle": 1 if meta["subtitle"] else 0,
@@ -155,6 +185,8 @@ def do_scan(cfg=None, dry_run=False, progress=None, scope="full", path=None, sto
                 if path_ in snap:
                     updated += 1
                     if dry_run:
+                        if stage is not None:
+                            stage.append({**data, "action": "update", "media_id": snap[path_][0]})
                         continue
                     con.execute(
                         """UPDATE media SET category=:category, title=:title, title_jp=:title_jp,
@@ -169,6 +201,8 @@ def do_scan(cfg=None, dry_run=False, progress=None, scope="full", path=None, sto
                     if exist:
                         updated += 1
                         if dry_run:
+                            if stage is not None:
+                                stage.append({**data, "action": "update", "media_id": exist["id"]})
                             continue
                         con.execute(
                             """UPDATE media SET category=:category, title=:title, title_jp=:title_jp,
@@ -179,6 +213,8 @@ def do_scan(cfg=None, dry_run=False, progress=None, scope="full", path=None, sto
                     else:
                         added += 1
                         if dry_run:
+                            if stage is not None:
+                                stage.append({**data, "action": "add"})
                             continue
                         cols = list(data.keys())
                         con.execute(
@@ -239,6 +275,72 @@ def do_scan(cfg=None, dry_run=False, progress=None, scope="full", path=None, sto
 def json_dumps(obj):
     import json
     return json.dumps(obj, ensure_ascii=False)
+
+
+def import_staged(items, category, progress=None, stop=None):
+    """把暂存清单真正写入索引（人工点「导入」后调用）。
+
+    - 分类一律用**用户显式指定**的 ``category``（防呆：不允许「自动（按目录名）」）。
+    - 导入前对每条做**二次校验**：文件仍存在且 ``size:mtime`` 指纹与扫描时一致，
+      否则跳过（提示重新扫描），绝不把过期路径写进索引。
+    - 不做「移除已消失文件」——那是删除操作，与导入解耦，需要清理时用作品管理。
+    """
+    cfg = cfg_mod.load()
+    con = db.connect()
+    db.init(con)
+    lock = db.write_lock()
+    lock.acquire()
+    try:
+        added = updated = skipped = 0
+        total = len(items)
+        done = 0
+        for it in items:
+            if stop is not None and stop.is_set():
+                break
+            fp = it.get("file_path") or ""
+            try:
+                st = os.stat(fp)
+            except OSError:
+                skipped += 1           # 文件已不在磁盘 → 不导入
+            else:
+                if _hash(st.st_size, st.st_mtime) != it.get("scan_hash"):
+                    skipped += 1       # 扫描之后文件又变了 → 提示重新扫描
+                else:
+                    data = {k: v for k, v in it.items() if k not in ("action", "media_id")}
+                    data["category"] = category
+                    # 来源组以**导入时**的当前路径重算（扫描到导入之间文件可能被移动过）
+                    data["studio"] = source_group(fp)
+                    data["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    exist = con.execute("SELECT id FROM media WHERE file_path=?", (fp,)).fetchone()
+                    if exist:
+                        con.execute(
+                            """UPDATE media SET category=:category, title=:title, title_jp=:title_jp,
+                               studio=:studio, publish_date=:publish_date, year=:year, subtitle=:subtitle,
+                               file_size=:file_size, poster_path=:poster_path, meta=:meta,
+                               scan_hash=:scan_hash, updated_at=:updated_at WHERE id=:id""",
+                            {**data, "id": exist["id"]})
+                        updated += 1
+                    else:
+                        cols = list(data.keys())
+                        con.execute(
+                            f"INSERT INTO media ({','.join(cols)}) VALUES ({','.join(':'+c for c in cols)})",
+                            data)
+                        added += 1
+            done += 1
+            if progress and (done % 25 == 0 or done == total):
+                progress(done, total, current=it.get("title"))
+        # 分类登记进字典（与页面筛选 / 作品管理共用同一份分类数据）
+        db.sync_categories(con)
+        con.execute("INSERT OR IGNORE INTO categories(name) VALUES(?)", (category,))
+        # 简评评分回填（与全量扫描一致；导入可能是大批量新增）
+        hits, pending = _match_ratings(con, cfg)
+        con.commit()
+        return {"added": added, "updated": updated, "skipped": skipped,
+                "total": total, "canceled": bool(stop is not None and stop.is_set()),
+                "rating_hits": hits, "rating_pending": pending}
+    finally:
+        lock.release()
+        con.close()
 
 
 def _match_ratings(con, cfg):

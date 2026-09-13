@@ -1,4 +1,4 @@
-"""扫描（路径/全盘/可取消）与全量联网补全 的工作流测试。"""
+﻿"""扫描（路径/全盘/可取消）与全量联网补全 的工作流测试。"""
 import os
 
 import pytest
@@ -214,7 +214,7 @@ class TestCompletion:
         import app.db as db
         _make_video(fake_cfg, "2022年视频/[无名]打标测试.chs.mp4")
         # 简评文件：roots 下任意位置，文件名含「简评」且 .txt
-        (fake_cfg / "简评.txt").write_text("《打标测试》本作奇幻冒险浓厚，校园恋爱设定", encoding="utf-8")
+        (fake_cfg / "简评.txt").write_text("《打标测试》本作战斗场面激烈，校园与日常背景", encoding="utf-8")
         from app.services import completion, scanner
         scanner.do_scan(scope="path", path=str(fake_cfg), dry_run=False)
         con = db.connect()
@@ -229,7 +229,7 @@ class TestCompletion:
         result = completion.run_completion(job, mid=mid, resolver=NoTagResolver())
         tags = [r["name"] for r in con.execute(
             "SELECT t.name FROM media_tags mt JOIN tags t ON t.id=mt.tag_id WHERE mt.media_id=?", (mid,)).fetchall()]
-        assert "奇幻" in tags and "校园" in tags
+        assert "动作" in tags and "校园" in tags
         assert result["tags_local"] >= 1
         con.close()
 

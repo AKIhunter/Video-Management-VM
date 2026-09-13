@@ -6,10 +6,10 @@
 - ids 指定时：仅补全传入 ID 列表的作品（含信息完整者，重点补 tag）。
 
 补全内容：
-- 简介：联网候选（本地→百度→sample 级联），≤500 字。
+- 简介：联网候选（本地→百度→media-db 级联），≤500 字。
 - 发布年月：文件夹路径派生（最可靠）优先，联网候选 publish_date 兜底；系统计算值，
   不污染 edited_fields，但尊重人工已编辑的 year/publish_date。
-- 标签：联网候选经 tagdict.filter_tags 过滤（按题材，≤TAG_LIMIT）优先；
+- 标签：联网候选经 kinks.filter_kink 过滤（按题材，≤TAG_LIMIT）优先；
   作品完全无标签且联网未命中时，以本机简评打标（tagging.tags_for_title）作 fallback。
 
 edited_fields 保护是铁律：synopsis / tags 已人工编辑则永不覆盖；year / publish_date
@@ -21,7 +21,7 @@ import os
 
 from .. import config as cfg_mod
 from .. import db
-from . import tagdict
+from . import kinks
 from . import tagging
 from .metadata_provider import (OnlineResolver, synopsis_missing,
                                  validate_candidate)
@@ -153,9 +153,9 @@ def run_completion(job, source="online", mid=None, ids=None, resolver=None):
                     year_filled += 1
                     wrote = True
 
-            # ③ 标签：联网 tag 优先 → 本机简评打标 fallback（仅作品完全无标签时）
+            # ③ 标签：联网 kink 优先 → 本机简评打标 fallback（仅作品完全无标签时）
             if "tags" not in edited_set:
-                online_tags = tagdict.filter_tags(cand.get("tags") or [], limit=tagdict.TAG_LIMIT)
+                online_tags = kinks.filter_kink(cand.get("tags") or [], limit=kinks.TAG_LIMIT)
                 if online_tags:
                     _set_tags(con, row["id"], online_tags)
                     edited_set.add("tags")
@@ -165,7 +165,7 @@ def run_completion(job, source="online", mid=None, ids=None, resolver=None):
                     wrote = True
                 elif not row["has_tags"]:
                     # 联网未取到题材 tag 且作品无任何标签 → 本机简评打标 fallback
-                    local_tags = tagging.tags_for_title(_entries(), row["title"], limit=tagdict.TAG_LIMIT)
+                    local_tags = tagging.tags_for_title(_entries(), row["title"], limit=kinks.TAG_LIMIT)
                     if local_tags:
                         _set_tags(con, row["id"], local_tags)
                         _stamp_meta(con, row, "auto_tags", {

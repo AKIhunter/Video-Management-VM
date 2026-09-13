@@ -1,4 +1,4 @@
-"""联网封面补全的单元测试（网络部分打补丁，验证解析与任务写回逻辑）。"""
+﻿"""联网封面补全的单元测试（网络部分打补丁，验证解析与任务写回逻辑）。"""
 import json
 import os
 
@@ -52,11 +52,11 @@ def test_verify_image_rejects_tiny_bytes():
 
 
 def test_build_keyword_truncates_and_cleans():
-    kw = oc._build_keyword({"title": "デーモンバスターズ ～えっちなえっちなデーモン退治～ 「ドキドキッ 触手だらけ」"})
+    kw = oc._build_keyword({"title": "デーモンバスターズ ～ひかりとひかりのデーモン退治～ 「ドキドキッ 勇者だらけ」"})
     assert "「" not in kw and len(kw) <= oc.KW_MAX
-    kw2 = oc._build_keyword({"title": "OVAそれでも妻を愛してる2 ＃1"})
+    kw2 = oc._build_keyword({"title": "OVAふたりの未来ノート2 ＃1"})
     assert "＃" not in kw2
-    kw3 = oc._build_keyword({"title": "僕と先生と友達のママ 後編"})
+    kw3 = oc._build_keyword({"title": "僕と先生と放課後の部室 後編"})
     assert "後編" in kw3 or "第" not in kw3
 
 
@@ -194,7 +194,7 @@ def test_save_review_upsert_replaces_pending(tmp_path, monkeypatch):
 
 def test_search_cover_keyword_override(monkeypatch):
     calls = []
-    monkeypatch.setattr(oc, "_search_sample",
+    monkeypatch.setattr(oc, "_search_media_db",
                         lambda kw: (calls.append(kw) or ("T", "https://p/1", 0.9)))
     monkeypatch.setattr(oc, "_fetch", lambda url, **kw: b"<html></html>")
     monkeypatch.setattr(oc, "_extract_image_candidates", lambda html: ["https://x/1.jpg"])

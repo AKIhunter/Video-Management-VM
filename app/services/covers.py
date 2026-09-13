@@ -272,7 +272,9 @@ def run_cover_backfill(job) -> dict:
 
 # ---------------------------------------------------------------- 指定目录补全 / 视频帧封面标记
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
-VIDEO_FRAME_MODE = "video_frame"      # meta.cover_mode 取值：用视频预览帧当封面（不落盘任何图片）
+# 旧版「视频帧封面标记」的 meta.cover_mode 取值：界面入口已移除（由服务端抽帧替代），
+# 仅作历史数据兼容 —— 抽帧成功后会清掉该标记，前端仍能渲染遗留的 video_frame 封面。
+VIDEO_FRAME_MODE = "video_frame"
 
 
 def build_dir_index(root: str, stop=None, limit: int = 50000) -> list:
@@ -358,52 +360,5 @@ def run_cover_dir_backfill(cfg, root: str, threshold: float = 0.62, stop=None,
                 "matched": matched, "no_match": no_match,
                 "skipped_has_cover": skipped_has_cover, "skipped_edited": skipped_edited,
                 "canceled": bool(stop is not None and stop.is_set())}
-    finally:
-        con.close()
-
-
-def set_video_frame_cover(cfg, ids=None, clear: bool = False) -> dict:
-    """把作品标记/取消「用视频预览帧当封面」。
-
-    仅在 meta.cover_mode 打标记，**不生成、不存储任何图片文件**：
-    前端直接播放视频并显示其预览帧作为封面（截图行为只发生在浏览器内存里）。
-    """
-    import json as _json
-    id_set = {int(x) for x in (ids or []) if str(x).strip().isdigit()} or None
-    con = db.connect()
-    db.init(con)
-    try:
-        rows = con.execute("SELECT id, poster_path, meta, edited_fields FROM media").fetchall()
-        marked = cleared = skipped_has_cover = skipped_edited = 0
-        for r in rows:
-            if id_set is not None and r["id"] not in id_set:
-                continue
-            meta = {}
-            try:
-                meta = _json.loads(r["meta"] or "{}") or {}
-            except ValueError:
-                meta = {}
-            if clear:
-                if meta.pop("cover_mode", None) is None:
-                    continue
-                con.execute("UPDATE media SET meta=?, updated_at=datetime('now','localtime') "
-                            "WHERE id=?", (_json.dumps(meta, ensure_ascii=False), r["id"]))
-                cleared += 1
-                continue
-            if r["poster_path"] and os.path.exists(r["poster_path"]):
-                skipped_has_cover += 1
-                continue
-            if "poster_path" in edited(r):
-                skipped_edited += 1
-                continue
-            if meta.get("cover_mode") == VIDEO_FRAME_MODE:
-                continue
-            meta["cover_mode"] = VIDEO_FRAME_MODE
-            con.execute("UPDATE media SET meta=?, updated_at=datetime('now','localtime') "
-                        "WHERE id=?", (_json.dumps(meta, ensure_ascii=False), r["id"]))
-            marked += 1
-        con.commit()
-        return {"marked": marked, "cleared": cleared,
-                "skipped_has_cover": skipped_has_cover, "skipped_edited": skipped_edited}
     finally:
         con.close()

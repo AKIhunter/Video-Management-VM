@@ -188,30 +188,52 @@ def _search_fuzzy(d: str, n_base: str):
 
 # ---------------- 简评评分 ----------------
 
-def normalize_score(text: str):
-    """把 推荐度/评分/实用度 文案换算为 0-5 分。"""
+# 库内评分量纲：0~10（满分 10，最低 0）
+RATING_MAX = 10.0
+# 简评原文星级（0~5）→ 库内 0~10 的换算系数
+_STAR_SCALE = 2.0
+
+
+def _normalize_score_raw(text: str):
+    """把 推荐度/评分/实用度 文案换算为原文星级 0~5（内部用，含「双档」处理）。"""
     if not text:
         return None
     text = text.strip()
     if "→" in text:
         text = text.split("→")[-1]
+    score = None
+    raw = text
     if "★" in text or "☆" in text:
         runs = re.findall(r"[★☆]+", text)
         if runs:
             run = runs[0]
-            return run.count("★") + 0.5 * run.count("☆")
-    m = re.search(r"(\d+(?:\.\d+)?)\s*星\s*(半)?", text)
-    if m:
-        base = float(m.group(1))
-        return base + (0.5 if m.group(2) else 0.0)
-    m = re.search(r"(\d+(?:\.\d+)?)", text)
-    if m:
-        return float(m.group(1))
-    return None
+            score = run.count("★") + 0.5 * run.count("☆")
+    if score is None:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*星\s*(半)?", text)
+        if m:
+            score = float(m.group(1)) + (0.5 if m.group(2) else 0.0)
+    if score is None:
+        m = re.search(r"(\d+(?:\.\d+)?)", text)
+        if m:
+            score = float(m.group(1))
+    # 双档：形如「0（纯主观）3.5（较客观）」取「较客观」的值
+    if score is not None and score == 0 and r"客观" in raw:
+        m2 = re.search(r"(\d+(?:\.\d+)?)\s*[（(][^)）]*?(?:客观|较客观)[^)）]*[)）]", raw)
+        if m2:
+            score = float(m2.group(1))
+    return score
+
+
+def normalize_score(text: str):
+    """把 推荐度/评分/实用度 文案换算为**库内 0~10 分**（原文星级 0~5 × 2，封顶 10）。"""
+    v = _normalize_score_raw(text)
+    if v is None:
+        return None
+    return min(RATING_MAX, v * _STAR_SCALE)
 
 
 def parse_jianping(text: str):
-    """解析一期简评文本 -> [(title, score, raw_score)]"""
+    """解析一期简评文本 -> [(title, score, raw_score)]（score 为库内 0~10）"""
     out = []
     tokens = re.split(r"(《[^》]+》)", text)
     cur = None
@@ -236,9 +258,4 @@ def _finalize(title, tail):
     if m:
         raw = m.group(1).strip()
         score = normalize_score(raw)
-    # 双档：形如「0（纯主观）3.5（较客观）」取「较客观」的值
-    if score is not None and score == 0 and r"客观" in raw:
-        m2 = re.search(r"(\d+(?:\.\d+)?)\s*[（(][^)）]*?(?:客观|较客观)[^)）]*[)）]", raw)
-        if m2:
-            score = float(m2.group(1))
     return {"title": title.strip("《》"), "score": score, "raw_score": raw}

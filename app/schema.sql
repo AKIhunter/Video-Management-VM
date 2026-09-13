@@ -3,11 +3,15 @@ PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 
--- 用户（v1 只 seed id=1 默认 admin 用户，预留多用户与角色）
+-- 用户（v1 seed id=1 默认 admin；管理中心可增删改查）
 CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT UNIQUE,
   role       TEXT NOT NULL DEFAULT 'user',   -- 'admin' / 'user'
+  points     INTEGER NOT NULL DEFAULT 0,     -- 成长值（签到累计），决定等级
+  checkin_days    INTEGER NOT NULL DEFAULT 0, -- 累计签到天数
+  checkin_streak  INTEGER NOT NULL DEFAULT 0, -- 连续签到天数（断签清零）
+  last_checkin    TEXT,                       -- 最近签到日期（YYYY-MM-DD，「每日一次」判断用）
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
@@ -32,9 +36,12 @@ CREATE TABLE IF NOT EXISTS media (
   file_ext      TEXT,
   duration_sec  INTEGER,
   poster_path   TEXT,
-  rating_norm   REAL,
+  rating_norm   REAL,                        -- 历史/简评评分，量纲 0~10（旧 0~5 已 ×2 换算）
   rating_raw    TEXT,
   rating_source TEXT,
+  rating_avg    REAL,                        -- 用户评分均值 0~10（由 watch_state 统计；无人评分时 NULL）
+  rating_votes  INTEGER DEFAULT 0,           -- 参与均值的用户数
+  rating_updated_at TEXT,                    -- 均值最近结算时间（空闲重算据此判断过期）
   synopsis      TEXT,
   edited_fields TEXT DEFAULT '[]',
   meta          TEXT,

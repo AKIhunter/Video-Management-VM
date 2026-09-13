@@ -1,4 +1,4 @@
-"""元数据提供方。
+﻿"""元数据提供方。
 
 统一候选协议 resolve(media_row) -> dict（candidate）：
 
@@ -24,10 +24,10 @@ from difflib import SequenceMatcher
 from html.parser import HTMLParser
 
 MAX_SYNOPSIS = 500   # 字数（教学/学习用途放宽：原为 100）
-MAX_TAGS = 30        # 每个作品最多 tag 数（候选清洗上限；业务上限见 tagdict.TAG_LIMIT）
+MAX_TAGS = 30        # 每个作品最多 tag 数（候选清洗上限；业务上限见 kinks.TAG_LIMIT）
 MAX_TAG_LEN = 20     # 单个 tag 最大字符数（原为 10）
 
-# 发布日期候选正则：<time datetime="YYYY-MM..."> 或 sample 上传路径 uploads/YYYY/MM/
+# 发布日期候选正则：<time datetime="YYYY-MM..."> 或 media-db 上传路径 uploads/YYYY/MM/
 _TIME_DT = re.compile(r'<time[^>]+datetime=["\'](\d{4})-(\d{1,2})', re.I)
 _UPLOAD_YM = re.compile(r'/uploads/(\d{4})/(\d{1,2})/', re.I)
 _PUB_RE = re.compile(r'^(\d{4})-(\d{1,2})(?:-\d{1,2})?$')
@@ -175,8 +175,8 @@ def build_keyword(media_row) -> str:
     return (media_row.get("title_jp") or media_row.get("title") or "").strip()
 
 
-def extract_sample_results(html_text: str) -> list:
-    """从 sample 搜索页解析 (标题, 链接)。按匹配度排序由调用方做。"""
+def extract_media_db_results(html_text: str) -> list:
+    """从 media-db 搜索页解析 (标题, 链接)。按匹配度排序由调用方做。"""
     out = []
     # 常见 wordpress 结果：<h2 class="entry-title"><a href="..">title</a></h2>
     for m in re.finditer(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html_text, re.S):
@@ -197,8 +197,8 @@ def extract_sample_results(html_text: str) -> list:
     return uniq
 
 
-def extract_sample_post(html_text: str) -> dict:
-    """解析 sample 单篇：返回 {synopsis, tags, publish_date}。"""
+def extract_media_db_post(html_text: str) -> dict:
+    """解析 media-db 单篇：返回 {synopsis, tags, publish_date}。"""
     hp = _HarvestParser()
     hp.feed(html_text)
     plain = _strip_html_text(html_text)
@@ -289,7 +289,7 @@ class LocalResolver(BaseResolver):
         }
 
 
-class SampleResolver(BaseResolver):
+class MediaDbResolver(BaseResolver):
     """联网候选：抓取 media-db.example.com 的搜索 + 单篇，产出简介/tag 候选。
 
     站点结构/可访问性随版本变化，所有网络与解析失败均降级返回空候选，
@@ -311,7 +311,7 @@ class SampleResolver(BaseResolver):
             return {"synopsis": None, "tags": [], "source": self.name,
                     "url": self._search_url(keyword), "confidence": 0,
                     "error": f"搜索失败: {e}"}
-        results = extract_sample_results(html_text)
+        results = extract_media_db_results(html_text)
         if not results:
             return {"synopsis": None, "tags": [], "source": self.name,
                     "url": self._search_url(keyword), "confidence": 0,
@@ -324,7 +324,7 @@ class SampleResolver(BaseResolver):
         except Exception as e:  # noqa: BLE001
             return {"synopsis": None, "tags": [], "source": self.name,
                     "url": best_url, "confidence": 0.3, "error": f"抓取帖子失败: {e}"}
-        cand = extract_sample_post(post_html)
+        cand = extract_media_db_post(post_html)
         cand.update({"source": self.name, "url": best_url, "title_matched": best_title,
                      "confidence": 0.8 if cand.get("tags") or cand.get("synopsis") else 0.3})
         return validate_candidate(cand)
@@ -333,7 +333,7 @@ class SampleResolver(BaseResolver):
 class BaiduResolver(BaseResolver):
     """联网候选（百度）：优先采用，命中度最高摘要作为简介候选。
 
-    Baidu 无稳定的 tag 结构，主要产出 synopsis 与核对链接；失败降级到 sample。
+    Baidu 无稳定的 tag 结构，主要产出 synopsis 与核对链接；失败降级到 media-db。
     """
 
     name = "baidu"
@@ -367,10 +367,10 @@ class BaiduResolver(BaseResolver):
 
 
 class CascadeResolver(BaseResolver):
-    """候选级联：本地 → 百度 → sample。
+    """候选级联：本地 → 百度 → media-db。
 
     - 本地已有简介，直接采用本地，不联网（优先本地信息源）。
-    - 本地缺失时依序尝试百度、sample，返回首个产出非空候选的来源。
+    - 本地缺失时依序尝试百度、media-db，返回首个产出非空候选的来源。
     任何来源失败都只是「没有可用简介」，不抛异常、不阻塞批量任务。
     """
 
@@ -383,8 +383,8 @@ class CascadeResolver(BaseResolver):
                                        "confidence": 1.0, "error": None})
 
         last = {"synopsis": None, "tags": [], "source": "none", "url": None,
-                "confidence": 0, "error": "百度与 sample 均未取到有效信息"}
-        for R in (BaiduResolver, SampleResolver):
+                "confidence": 0, "error": "百度与 media-db 均未取到有效信息"}
+        for R in (BaiduResolver, MediaDbResolver):
             try:
                 cand = R().resolve(media_row)
             except Exception as e:  # noqa: BLE001
@@ -397,7 +397,7 @@ class CascadeResolver(BaseResolver):
 
 
 class OnlineResolver(BaseResolver):
-    """聚合在线候选入口：级联（本地→百度→sample）。"""
+    """聚合在线候选入口：级联（本地→百度→media-db）。"""
 
     name = "online"
 
@@ -411,5 +411,5 @@ def get_resolver(kind="local") -> BaseResolver:
         "online": OnlineResolver(),
         "cascade": CascadeResolver(),
         "baidu": BaiduResolver(),
-        "sample": SampleResolver(),
+        "media-db": MediaDbResolver(),
     }.get(kind, LocalResolver())

@@ -22,14 +22,15 @@ from ..services import scanner
 from ..authz import require_admin
 from ..services.backfill import run_metadata_backfill
 from ..services.completion import run_completion
-from ..services.covers import run_cover_backfill, run_cover_dir_backfill, set_video_frame_cover
+from ..services.covers import run_cover_backfill, run_cover_dir_backfill
 from ..db import get_db
 from ..services.frames import run_frame_backfill
-from ..services.tagdict import TAG_LIMIT
+from ..services.kinks import TAG_LIMIT
 from ..services.metadata_provider import MAX_TAG_LEN, MAX_TAGS, OnlineResolver, validate_candidate
 from ..services.online_covers import (_fetch, download_cover, save_review, search_cover,
                              run_online_cover_backfill)
 from ..services.tagging import run_tag_backfill
+from ..services.ratings import RATING_MAX
 from ..core.media_helpers import media_or_404
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -54,6 +55,12 @@ EDITABLE = {
 
 
 def _scan_worker(job) -> dict:
+    """扫描 = **只产出待导入清单**（dry_run，不写库）；人工点「导入」才真正入库。
+
+    清单进 ``scan_stage`` 暂存区（进程内存），由 `GET /scan/staged` 展示、`POST /scan/import` 落库。
+    """
+    from ..services import scan_stage
+
     cfg = cfg_mod.load()
     scope = job.meta.get("scope", "full")
     path = job.meta.get("path")
@@ -61,9 +68,33 @@ def _scan_worker(job) -> dict:
     def progress(done, total, current=None):
         job.tick(done, total, current=current)
 
-    return scanner.do_scan(cfg, dry_run=False, scope=scope, path=path,
-                           stop=job.stop, progress=progress,
-                           category_override=job.meta.get("category"))
+    stage: list = []
+    result = scanner.do_scan(cfg, dry_run=True, scope=scope, path=path,
+                             stop=job.stop, progress=progress,
+                             category_override=job.meta.get("category"), stage=stage)
+    n = scan_stage.set_stage(stage, {"scope": scope, "path": path,
+                                     "category": job.meta.get("category") or ""})
+    result["staged"] = n
+    result["note"] = "已生成待导入清单，请到下方确认后点「导入到索引」"
+    return result
+
+
+def _scan_import_worker(job) -> dict:
+    """导入暂存清单（kind 仍为 scan，复用状态/取消/通知通道；meta.phase=import）。"""
+    from ..services import scan_stage
+
+    category = job.meta.get("category") or ""
+    items = scan_stage.items()
+
+    def progress(done, total, current=None):
+        job.tick(done, total, current=current)
+
+    result = scanner.import_staged(items, category, progress=progress, stop=job.stop)
+    if not result.get("canceled"):
+        scan_stage.clear()
+    result["note"] = ("导入完成，暂存清单已清空" if not result.get("canceled")
+                      else "导入已取消，暂存清单保留")
+    return result
 
 
 def _completion_worker(job) -> dict:
@@ -198,6 +229,12 @@ def edit_media(mid: int, body: dict, _u=Depends(require_admin), con=Depends(get_
 
     if "synopsis" in fields:
         fields["synopsis"] = validate_candidate({"synopsis": fields["synopsis"]})["synopsis"]
+    if "rating_norm" in fields:
+        try:
+            rn = float(fields["rating_norm"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "评分必须是数字")
+        fields["rating_norm"] = max(0.0, min(float(RATING_MAX), rn))
 
     upd = []
     for key in fields:
@@ -223,11 +260,81 @@ def edit_media(mid: int, body: dict, _u=Depends(require_admin), con=Depends(get_
     return {"ok": True, "media": _media_row_dict(con, mid), "tags": media_tags(con, mid)}
 
 
-# ---------------------------------------------------------------- 用户 / 用户组（占位）
+# ---------------------------------------------------------------- 用户管理（管理中心 · 增删改查）
+def _default_user_id() -> int:
+    """当前登录体系解析用的默认账号 id（不可删除 / 不可降级，否则会把自己锁在门外）。"""
+    return int(cfg_mod.load().get("default_user_id") or 1)
+
+
 @router.get("/users")
 def list_users(_u=Depends(require_admin), con=Depends(get_db)):
-    rows = con.execute("SELECT id, name, role, created_at FROM users ORDER BY id").fetchall()
-    return {"items": [dict(r) for r in rows]}
+    """账号列表（含等级 / 成长值 / 签到概况）。"""
+    from ..services import levels
+    rows = con.execute(
+        "SELECT id, name, role, points, checkin_days, checkin_streak, last_checkin, created_at "
+        "FROM users ORDER BY id").fetchall()
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["level"] = levels.level_of(d["points"] or 0)
+        d["is_default"] = d["id"] == _default_user_id()
+        items.append(d)
+    return {"items": items, "default_user_id": _default_user_id()}
+
+
+@router.post("/users")
+def create_user(body: dict = None, _u=Depends(require_admin), con=Depends(get_db)):
+    """新增账号（name 必填 ≤40 字；role ∈ admin/user）。"""
+    body = body or {}
+    name = (body.get("name") or "").strip()[:40]
+    role = (body.get("role") or "user").strip().lower()
+    if not name:
+        raise HTTPException(400, "账号名不能为空")
+    if role not in ("admin", "user"):
+        raise HTTPException(400, "role 只能是 admin / user")
+    if con.execute("SELECT 1 FROM users WHERE name=?", (name,)).fetchone():
+        raise HTTPException(400, "账号名已存在")
+    con.execute("INSERT INTO users(name, role) VALUES(?,?)", (name, role))
+    con.commit()
+    row = con.execute("SELECT id, name, role FROM users WHERE name=?", (name,)).fetchone()
+    return {"ok": True, "user": dict(row)}
+
+
+@router.put("/users/{uid}")
+def update_user(uid: int, body: dict = None, _u=Depends(require_admin), con=Depends(get_db)):
+    """修改账号（改名 / 改角色）。默认登录账号不可降级为普通用户（防止把管理员锁在门外）。"""
+    row = con.execute("SELECT id, name, role FROM users WHERE id=?", (uid,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "账号不存在")
+    body = body or {}
+    name = (body.get("name") or "").strip()[:40] if "name" in body else row["name"]
+    role = (body.get("role") or row["role"]).strip().lower()
+    if not name:
+        raise HTTPException(400, "账号名不能为空")
+    if role not in ("admin", "user"):
+        raise HTTPException(400, "role 只能是 admin / user")
+    if uid == _default_user_id() and role != "admin":
+        raise HTTPException(400, "默认登录账号不能降级为普通用户（会失去管理权限）")
+    if name != row["name"] and con.execute(
+            "SELECT 1 FROM users WHERE name=? AND id!=?", (name, uid)).fetchone():
+        raise HTTPException(400, "账号名已存在")
+    con.execute("UPDATE users SET name=?, role=? WHERE id=?", (name, role, uid))
+    con.commit()
+    return {"ok": True, "user": {"id": uid, "name": name, "role": role}}
+
+
+@router.delete("/users/{uid}")
+def delete_user(uid: int, _u=Depends(require_admin), con=Depends(get_db)):
+    """删除账号：同时清掉该账号的观看状态 / 评分 / 收藏 / 备注（媒体与标签不受影响）。"""
+    if uid == _default_user_id():
+        raise HTTPException(400, "默认登录账号不能删除")
+    row = con.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "账号不存在")
+    con.execute("DELETE FROM watch_state WHERE user_id=?", (uid,))
+    con.execute("DELETE FROM users WHERE id=?", (uid,))
+    con.commit()
+    return {"ok": True, "deleted": uid, "name": row["name"]}
 
 
 @router.get("/usergroups")
@@ -792,6 +899,169 @@ def list_media_admin(
     return {"total": total, "page": page, "size": size, "items": [dict(r) for r in rows]}
 
 
+# ---- 重复作品检测（同名 / 高度相似标题，供人工去重）----
+DUP_SIMILARITY_DEFAULT = 0.86   # 标题相似度阈值（与 scanner 里评分匹配的 0.85 同量纲）
+DUP_SCAN_LIMIT = 5000           # 单次最多参与比对的条数（防超大库把请求拖死）
+DUP_GRAM_POST_LIMIT = 120       # 单个作品最多比对的候选组数（防高频 gram 拖慢）
+DUP_MAX_COMPARE = 300000        # 单次比对次数上限（时间保护）
+DUP_IGNORE_SETTINGS_KEY = "dup_ignore_keys"   # 「本组忽略」名单（settings，JSON 数组）
+
+
+def _dup_norm(title: str) -> str:
+    from ..services.parser import normalize_title
+    return normalize_title(title or "")
+
+
+def _load_dup_ignore(con) -> set:
+    import json as _json
+    raw = db.get_setting(con, DUP_IGNORE_SETTINGS_KEY) or "[]"
+    try:
+        data = _json.loads(raw)
+    except ValueError:
+        return set()
+    return {str(x) for x in data if isinstance(x, str) and x}
+
+
+def _dup_candidate_rows(con, category):
+    where, params = ("WHERE m.category = ?", [category]) if category else ("", [])
+    return con.execute(
+        f"SELECT m.id, m.category, m.title, m.title_jp, m.year, "
+        f"CASE WHEN (m.poster_path IS NOT NULL AND m.poster_path != '') "
+        f"          OR instr(coalesce(m.meta,''), 'video_frame') > 0 THEN 1 ELSE 0 END has_cover "
+        f"FROM media m {where} ORDER BY m.id LIMIT ?",
+        [*params, DUP_SCAN_LIMIT]).fetchall()
+
+
+def _dup_groups(con, category="", threshold=None):
+    """在指定分类内找出标题（归一化后）高度相似的作品分组。
+
+    算法：标题归一化（``parser.normalize_title``）→ 用 3-gram 倒排为每个「组代表」建索引
+    （只比对至少共享一个 gram 的候选）→ 与**组代表**的相似度 ≥ 阈值才并入该组，
+    否则自成一新组。采用「代表式聚类」而非单链聚类，避免 A~B、B~C 把一堆不同作品串成一大组。
+    分块 + 比对次数上限保证数千条量级仍是秒级；仅读取 id/标题/年份，不读标签文本与路径。
+    """
+    from difflib import SequenceMatcher
+    from ..services.parser import normalize_title
+
+    thr = float(threshold if threshold is not None else DUP_SIMILARITY_DEFAULT)
+    rows = _dup_candidate_rows(con, category)
+    n = len(rows)
+    items = []
+    for r in rows:
+        norm = normalize_title(r["title"] or "") or normalize_title(r["title_jp"] or "")
+        items.append({"row": r, "norm": norm})
+
+    groups = []        # [{"rep": idx, "members": [idx, ...]}]
+    rep_grams = {}     # 3-gram -> [组下标, ...]
+    compares = 0
+
+    for i, it in enumerate(items):
+        s = it["norm"]
+        if not s:
+            continue
+        keys = {s} if len(s) < 4 else {s[j:j + 3] for j in range(len(s) - 2)}
+
+        cand = []
+        for g in keys:
+            for gi in rep_grams.get(g, ()):
+                if gi not in cand:
+                    cand.append(gi)
+            if len(cand) >= DUP_GRAM_POST_LIMIT:
+                break
+
+        target = None
+        for gi in cand[:DUP_GRAM_POST_LIMIT]:
+            if compares >= DUP_MAX_COMPARE:
+                break
+            rep = items[groups[gi]["rep"]]["norm"]
+            if not rep:
+                continue
+            compares += 1
+            if SequenceMatcher(None, s, rep).ratio() >= thr:
+                target = gi
+                break
+
+        if target is None:
+            groups.append({"rep": i, "members": [i]})
+            gi = len(groups) - 1
+            for g in keys:
+                rep_grams.setdefault(g, []).append(gi)
+        else:
+            groups[target]["members"].append(i)
+
+    out = []
+    for grp in groups:
+        if len(grp["members"]) < 2:
+            continue
+        grp["members"].sort(key=lambda i: items[i]["row"]["id"])
+        out.append([items[i] for i in grp["members"]])
+    # 已忽略的组不再返回（「本组忽略」按组内成员的归一化标题匹配，删掉代表项也不影响）
+    ignored = _load_dup_ignore(con)
+    ignored_groups = sum(1 for g in out if any(it["norm"] in ignored for it in g))
+    out = [g for g in out if not any(it["norm"] in ignored for it in g)]
+    # 组内条数多的排前面；同数量按最小 id
+    out.sort(key=lambda g: (-len(g), g[0]["row"]["id"]))
+
+    def _pub(it):
+        r = it["row"]
+        return {"id": r["id"], "category": r["category"], "title": r["title"],
+                "title_jp": r["title_jp"], "year": r["year"], "has_cover": r["has_cover"]}
+
+    result = [{"key": g[0]["norm"], "items": [_pub(it) for it in g]} for g in out]
+    return {"category": category, "threshold": thr, "scanned": n,
+            "truncated": n >= DUP_SCAN_LIMIT, "ignored_groups": ignored_groups,
+            "ignored_total": len(ignored), "groups": result}
+
+
+@router.get("/media/duplicates")
+def list_duplicate_media(category: str = "", threshold: float = None,
+                         _u=Depends(require_admin), con=Depends(get_db)):
+    """按分类列出「标题高度相似」的作品分组，供人工去重。
+
+    仅返回 id / 标题 / 年份 / 分类 / 有无封面，不涉及标签文本与文件路径。
+    选定保留项后，用 ``POST /media/bulk`` 的 ``action=delete`` 删除其余重复索引
+    （**只删索引，不动磁盘文件**）。
+    """
+    if threshold is not None and not (0.5 <= float(threshold) <= 1.0):
+        raise HTTPException(400, "threshold 需在 0.5~1.0 之间")
+    return _dup_groups(con, category=category, threshold=threshold)
+
+
+@router.post("/media/duplicates/ignore")
+def ignore_duplicate_group(body: dict = None, _u=Depends(require_admin), con=Depends(get_db)):
+    """「本组忽略」：被忽略的组以后不再出现在重复检测结果里。
+
+    记录的是组内成员的**归一化标题**集合（存 settings）—— 即便组里某条被删掉，
+    剩余成员仍会被识别为已忽略；把标题改掉则自然解除。``clear=true`` 清空全部忽略名单。
+    """
+    import json as _json
+    body = body or {}
+    keys = sorted(_load_dup_ignore(con))
+    if body.get("clear"):
+        keys = []
+    else:
+        key = (body.get("key") or "").strip()
+        if not key:
+            raise HTTPException(400, "缺少 key（组的归一化标题）")
+        if body.get("undo"):
+            keys = [k for k in keys if k != key]
+        else:
+            if key not in keys:
+                keys.append(key)
+            # 该组所有成员的归一化标题一并记录（按 key 找回该组）
+            for g in _dup_groups(con)["groups"]:
+                if g["key"] == key:
+                    for it in g["items"]:
+                        k2 = _dup_norm(it["title"] or it["title_jp"] or "")
+                        if k2 and k2 not in keys:
+                            keys.append(k2)
+                    break
+            keys = keys[:500]        # 名单上限保护
+    db.set_setting(con, DUP_IGNORE_SETTINGS_KEY, _json.dumps(keys, ensure_ascii=False))
+    con.commit()
+    return {"ok": True, "ignored": len(keys)}
+
+
 @router.post("/media/bulk")
 def bulk_media(body: dict = None, _u=Depends(require_admin), con=Depends(get_db)):
     """批量操作：移动分类 / 删除索引 / 打标签（**只改索引，绝不删除磁盘文件**）。
@@ -849,6 +1119,75 @@ def bulk_media(body: dict = None, _u=Depends(require_admin), con=Depends(get_db)
             "note": "仅删除索引，磁盘文件未做任何改动"}
 
 
+@router.post("/media/delete-files")
+def delete_media_with_files(body: dict = None, _u=Depends(require_admin), con=Depends(get_db)):
+    """删除作品：**索引 + 磁盘真实文件**（破坏性操作，前端必须二次确认）。
+
+    - 视频文件：存在即删除（``os.remove``）；
+    - 封面文件：仅当位于服务端管理的缓存目录（``frames_cache`` / ``cover_cache``）时一并删除，
+      位于用户素材目录里的海报**保留**（避免误删可能被其它作品共用的图片），并在返回里列出；
+    - 索引与关联数据（media_tags / watch_state / cover_reviews）同步删除；
+    - 文件已不存在的只删索引。
+    """
+    import os as _os
+    import shutil as _shutil
+
+    body = body or {}
+    ids = [int(x) for x in (body.get("ids") or []) if str(x).strip().isdigit()]
+    if not ids:
+        raise HTTPException(400, "未选择任何作品")
+    ph = ",".join("?" * len(ids))
+    rows = con.execute(
+        f"SELECT id, file_path, poster_path FROM media WHERE id IN ({ph})", ids).fetchall()
+    if not rows:
+        raise HTTPException(404, "作品不存在")
+
+    cfg = cfg_mod.load()
+    managed = []
+    frames_dir = _os.path.abspath(cfg.get("frames_dir") or _os.path.join(cfg_mod.BASE, "frames_cache"))
+    cover_cache = _os.path.abspath(_os.path.join(cfg_mod.BASE, "cover_cache"))
+    managed += [frames_dir, cover_cache]
+
+    deleted = files_deleted = missing = 0
+    leftovers = []
+    for r in rows:
+        fp = r["file_path"] or ""
+        # ① 删磁盘文件（先文件后索引，避免索引删了文件留孤儿还无从追溯）
+        if fp and _os.path.exists(fp):
+            if _os.path.isdir(fp):
+                leftovers.append(fp + "（是目录，已跳过）")
+            else:
+                try:
+                    _os.remove(fp)
+                    files_deleted += 1
+                except OSError as e:
+                    leftovers.append(f"{fp}（删除失败：{e}）")
+                    continue            # 文件删不掉 → 保留索引，避免出现"索引没了文件还在还删不掉"的混乱
+        else:
+            missing += 1
+        poster = r["poster_path"] or ""
+        if poster and _os.path.exists(poster):
+            if any(_os.path.abspath(poster).startswith(d) for d in managed):
+                try:
+                    _os.remove(poster)
+                except OSError:
+                    leftovers.append(poster)
+            else:
+                leftovers.append(poster + "（素材目录海报，已保留）")
+        # ② 删索引与关联
+        con.execute("DELETE FROM media_tags WHERE media_id=?", (r["id"],))
+        con.execute("DELETE FROM watch_state WHERE media_id=?", (r["id"],))
+        con.execute("DELETE FROM cover_reviews WHERE media_id=?", (r["id"],))
+        con.execute("DELETE FROM media WHERE id=?", (r["id"],))
+        deleted += 1
+    con.commit()
+    # 清理空的 frames_cache 孤儿（不递归删除目录本身）
+    return {"ok": True, "deleted": deleted, "files_deleted": files_deleted,
+            "missing": missing, "leftovers": leftovers,
+            "note": "已删除索引与磁盘文件；素材目录里的海报文件未删除" if leftovers
+                    else "已删除索引与磁盘文件"}
+
+
 @router.get("/media/{mid}")
 def get_media_admin(mid: int, _u=Depends(require_admin), con=Depends(get_db)):
     m = media_or_404(con, mid)
@@ -858,7 +1197,7 @@ def get_media_admin(mid: int, _u=Depends(require_admin), con=Depends(get_db)):
 # ------------------------------------------------------------- 联网补全（候选制）
 @router.post("/media/{mid}/metadata-refresh")
 def metadata_refresh(mid: int, _u=Depends(require_admin), con=Depends(get_db)):
-    """触发联网补全（sample 等），返回候选（不写库）。"""
+    """触发联网补全（media-db 等），返回候选（不写库）。"""
     row = media_or_404(con, mid)
     cand = OnlineResolver().resolve({k: row[k] for k in row.keys()})
     cand["edited_fields"] = sorted(set(json.loads(row["edited_fields"] or "[]")))
@@ -932,8 +1271,8 @@ def _cleanup_dirty_data(kind: str) -> None:
 def trigger_scan(body: dict = None, _u=Depends(require_admin), con=Depends(get_db)):
     """启动扫描：scope=full 全盘 / scope=path 定点目录。拆分目录分块，可取消。
 
-    category：可选。指定分类时，本次扫描到的作品一律记入该分类（不再按目录名推断），
-              同时该分类会登记进分类字典（与页面筛选、作品管理共用同一份分类数据）。
+    **两段式**：扫描只产出「待导入清单」（不写库），人工在下方确认清单并点「导入到索引」才会入库。
+    category：可选。指定分类时，扫描清单会按该分类预标注（导入时仍以导入时选择的分类为准）。
     全盘扫描须显式确认（防误触），未确认一律拒绝。
     """
     body = body or {}
@@ -962,6 +1301,49 @@ def scan_status(_u=Depends(require_admin)):
     if j is None or j.kind != "scan":
         return {"running": False, "kind": None}
     return j.status()
+
+
+@router.get("/scan/staged")
+def scan_staged(limit: int = Query(200, le=1000), offset: int = 0,
+                _u=Depends(require_admin)):
+    """当前「待导入清单」：扫描产出、尚未人工导入的候选（仅内存暂存，重启即清空）。"""
+    from ..services import scan_stage
+    s = scan_stage.summary()
+    s["items"] = scan_stage.view(limit=limit, offset=offset)
+    s["limit"] = limit
+    s["offset"] = offset
+    return s
+
+
+@router.post("/scan/staged/clear")
+def scan_staged_clear(_u=Depends(require_admin)):
+    """放弃当前待导入清单（不写库，仅清空暂存）。"""
+    from ..services import scan_stage
+    return {"ok": True, "cleared": scan_stage.clear()}
+
+
+@router.post("/scan/import")
+def scan_import(body: dict = None, _u=Depends(require_admin)):
+    """把待导入清单真正写入索引（**人工确认后才会导入**）。
+
+    防呆：``category`` 必填且不能是「自动（按目录名）」—— 导入归属哪个分类必须由人明确选择。
+    """
+    from ..services import scan_stage
+
+    body = body or {}
+    category = (body.get("category") or "").strip()
+    if not category or category in ("自动", "自动（按目录名）"):
+        raise HTTPException(400, "请先选择导入分类（不能选「自动（按目录名）」）")
+    staged = scan_stage.summary()
+    if staged["total"] == 0:
+        raise HTTPException(400, "暂无待导入清单，请先执行扫描")
+    job = jobs.Job("scan", _notify_wrap(_WORKER_LABELS["scan"], _scan_import_worker),
+                   scope="import", phase="import", category=category, total=staged["total"])
+    r = jobs.run_exclusive(job)
+    if not r["started"]:
+        return {"started": False, "reason": r["reason"]}
+    return {"started": True, "category": category, "total": staged["total"],
+            "added": staged["added"], "updated": staged["updated"]}
 
 
 @router.post("/scan/cancel")
@@ -1094,30 +1476,22 @@ def trigger_cover_dir(body: dict = None, _u=Depends(require_admin)):
     return {"ok": True, **r}
 
 
-@router.post("/cover-video-frame")
-def trigger_cover_video_frame(body: dict = None, _u=Depends(require_admin)):
-    """截图视频封面：把作品标记为「用视频预览帧当封面」（**不生成、不存储任何图片文件**）。
-
-    body: {action: "set"|"clear", ids: [...]}（ids 省略 = 处理所有符合条件的作品）
-    """
-    body = body or {}
-    action = (body.get("action") or "set").strip().lower()
-    if action not in ("set", "clear"):
-        raise HTTPException(400, "action 只能是 set 或 clear")
-    ids = [int(x) for x in (body.get("ids") or []) if str(x).strip().isdigit()]
-    r = set_video_frame_cover(cfg_mod.load(), ids=ids, clear=(action == "clear"))
-    return {"ok": True, "action": action, **r}
-
-
 @router.post("/cover-frame")
 def trigger_cover_frame(body: dict = None, _u=Depends(require_admin)):
-    """服务端抽帧封面：用 ffmpeg 把 cover_mode=video_frame 的作品抽帧落盘小图，写 poster_path。
+    """服务端抽帧封面：用 ffmpeg 给缺封面的作品抽帧落盘小图，写 poster_path。
 
-    body: {ids: [...]}（ids 省略 = 处理全部符合条件的作品）。
+    body: {ids: [...]} **必填** —— 使用 **A 区解析出的索引ID**（与「联网搜索封面」同一范围来源），
+    只处理范围内当前没有封面的作品；未传 ids 一律拒绝，避免误扫全库、耗时过长。
     抽帧后前端走 /api/poster/{id} 普通图片加载，无需浏览器再抓帧（首屏更快）。
+    （旧版「截图视频封面（标记）」已移除，由本功能替代。）
     """
     body = body or {}
-    ids = [int(x) for x in (body.get("ids") or []) if str(x).strip().isdigit()]
+    ids = []
+    for x in (body.get("ids") or []):
+        if str(x).strip().isdigit() and int(x) not in ids:
+            ids.append(int(x))
+    if not ids:
+        raise HTTPException(400, "请先在 A 区解析出索引ID（待处理范围），再执行服务端抽帧")
     job = jobs.Job("frame", _notify_wrap(_WORKER_LABELS["frame"], _frame_worker), ids=ids)
     r = jobs.run_exclusive(job)
     if not r["started"]:

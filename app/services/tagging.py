@@ -1,4 +1,4 @@
-"""本机简评打标：从磁盘「简评」txt 的描述文本中按题材词典提取 tag（每作品 ≤ tagdict.TAG_LIMIT）。
+"""本机简评打标：从磁盘「简评」txt 的描述文本中按题材词典提取 tag（每作品 ≤ kinks.TAG_LIMIT）。
 
 临时方案：不联网、不改 edited_fields（保留后续联网补全可继续优化 tags）。
 只写 media_tags 并把来源记录进 meta.auto_tags。
@@ -11,7 +11,7 @@ import re
 
 from .. import config as cfg_mod
 from .. import db
-from .tagdict import TAG_LIMIT, pick_tags
+from .kinks import TAG_LIMIT, pick_tags
 from .parser import normalize_title
 from ..core.fsutils import find_jianping_files, read_utf8
 

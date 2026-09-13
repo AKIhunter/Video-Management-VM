@@ -31,30 +31,37 @@ def test_old_encoding_bracket_removed():
 
 
 def test_score_star_text():
-    assert parser.normalize_score("4星半") == 4.5
-    assert parser.normalize_score("4星") == 4.0
-    assert parser.normalize_score("3.5") == 3.5
+    # 库内量纲 0~10（原文星级 ×2）
+    assert parser.normalize_score("4星半") == 9.0
+    assert parser.normalize_score("4星") == 8.0
+    assert parser.normalize_score("3.5") == 7.0
 
 
 def test_score_star_symbols():
-    assert parser.normalize_score("★★★★★") == 5.0
-    assert parser.normalize_score("★★★★☆") == 4.5
-    assert parser.normalize_score("★★☆") == 2.5
-    assert parser.normalize_score("★") == 1.0
+    assert parser.normalize_score("★★★★★") == 10.0
+    assert parser.normalize_score("★★★★☆") == 9.0
+    assert parser.normalize_score("★★☆") == 5.0
+    assert parser.normalize_score("★") == 2.0
+
+
+def test_score_is_capped_at_ten():
+    # 原文出现超过 5 星的数字（如「7」）也不能越过库内上限
+    assert parser.normalize_score("★★★★★★★") == 10.0
+    assert parser.normalize_score("7") == 10.0
 
 
 def test_score_arrow_takes_final():
-    assert parser.normalize_score("★★★★→★★★☆") == 3.5
+    assert parser.normalize_score("★★★★→★★★☆") == 7.0
 
 
 def test_score_paren_note_takes_first():
-    # 采用第一个星组（画风扣星后的实际分 ★★）
-    assert parser.normalize_score("★★（如果未对画风产生排斥反应则★★★）") == 2.0
+    # 采用第一个星组（画风扣星后的实际分 ★★ → 4 分）
+    assert parser.normalize_score("★★（如果未对画风产生排斥反应则★★★）") == 4.0
 
 
 def test_score_dual_objective():
     e = parser._finalize("タイトル", "实用度：0（纯主观）3.5（较客观）")
-    assert e["score"] == 3.5
+    assert e["score"] == 7.0
 
 
 def test_normalize_title():
@@ -66,5 +73,5 @@ def test_jianping_parse():
     text = "《テストコトイイコト》一作。推荐度：4星半。\n《別の作品》二作。实用度：★★☆。\n"
     out = parser.parse_jianping(text)
     title_to_score = {o["title"]: o["score"] for o in out}
-    assert title_to_score["テストコトイイコト"] == 4.5
-    assert title_to_score["別の作品"] == 2.5
+    assert title_to_score["テストコトイイコト"] == 9.0
+    assert title_to_score["別の作品"] == 5.0

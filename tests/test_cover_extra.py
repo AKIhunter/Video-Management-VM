@@ -95,42 +95,16 @@ def test_cover_dir_endpoint_rejects_bad_path(tmp_path, monkeypatch):
         admin.trigger_cover_dir({"path": ""}, None)
 
 
-# ---------------- 视频帧封面标记（不存储图片） ----------------
-def test_video_frame_cover_mark_and_clear(tmp_path, monkeypatch):
+# ---------------- 旧版「视频帧封面标记」遗留数据兼容（界面入口已移除，由服务端抽帧替代） ----------------
+def test_video_frame_mode_legacy_meta_still_serialized(tmp_path, monkeypatch):
+    """历史上标记过 cover_mode=video_frame 的作品：序列化仍暴露该值（前端可渲染），
+    待服务端抽帧写回 poster_path 后由 frames 清掉该标记。"""
     con = _mk_cfg(tmp_path, monkeypatch)
-    _add(con, 1, "标题甲")
-    have = tmp_path / "h.jpg"
-    have.write_bytes(b"x")
-    _add(con, 2, "标题乙", poster=str(have))
-    _add(con, 3, "标题丙", edited=["poster_path"])
-
-    r = covers.set_video_frame_cover({"category_filter": ["视频"]})
-    assert r["marked"] == 1 and r["skipped_has_cover"] == 1 and r["skipped_edited"] == 1
-    meta = json.loads(con.execute("SELECT meta FROM media WHERE id=1").fetchone()["meta"])
-    assert meta.get("cover_mode") == "video_frame"
-    # 不存储任何图片文件：没有生成 cover_cache，也没有新增图片
-    assert not (tmp_path / "cover_cache").exists()
-    # poster_path 仍为空（封面来自视频帧，不落盘）
-    assert con.execute("SELECT poster_path FROM media WHERE id=1").fetchone()["poster_path"] is None
-
-    # /api/media 序列化暴露 cover_mode（供前端渲染视频帧）
+    _add(con, 1, "标题甲", meta={"cover_mode": "video_frame"})
     row = con.execute("SELECT m.*, NULL AS status, NULL AS personal_rating, NULL AS favorite, "
                       "NULL AS note FROM media m WHERE m.id=1").fetchone()
     assert media.serialize(row)["cover_mode"] == "video_frame"
-
-    c = covers.set_video_frame_cover({"category_filter": ["视频"]}, clear=True)
-    assert c["cleared"] == 1
-    meta2 = json.loads(con.execute("SELECT meta FROM media WHERE id=1").fetchone()["meta"])
-    assert "cover_mode" not in meta2
     con.close()
-
-
-def test_video_frame_endpoint_bad_action(tmp_path, monkeypatch):
-    from fastapi import HTTPException
-    import pytest
-    _mk_cfg(tmp_path, monkeypatch)
-    with pytest.raises(HTTPException):
-        admin.trigger_cover_video_frame({"action": "oops"})
 
 
 # ---------------- 审定列表按步骤B范围筛选 ----------------

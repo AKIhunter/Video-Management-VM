@@ -8,7 +8,7 @@
 - extract_frame()：调 ffmpeg 抽一帧存 jpg（等比缩到固定宽）。
 - is_black_image()：PIL 判亮度，与前端 frameStats 口径一致。
 - pick_bright_frame()：抽 20% 处一帧，全黑则回退 50%（最多 2 次）。
-- run_frame_backfill()：长任务 worker，遍历 cover_mode=video_frame 且无封面的作品抽帧写 poster_path。
+- run_frame_backfill()：长任务 worker，给缺封面的作品（按 A 区解析的索引ID 限定范围）抽帧写 poster_path。
 """
 import json as _json
 import logging
@@ -122,20 +122,31 @@ def pick_bright_frame(video_path: str, out_jpg: str) -> bool:
 
 
 def run_frame_backfill(job, ids=None) -> dict:
-    """长任务 worker：遍历 cover_mode=video_frame 且无封面的作品，抽帧写 poster_path。
+    """长任务 worker：给缺封面的作品用 ffmpeg 抽帧，落盘小图写 poster_path。
 
-    job.meta 可带 ids（限定范围）；省略则处理全部符合条件的作品。
-    抽帧后写 poster_path 并清 meta.cover_mode（前端改走普通图片加载）。
+    ``ids``：限定范围（白屏管理按 **A 区解析出的索引ID** 传入，只处理其中没有封面的作品）；
+    为 None 时处理全库缺封面作品（仅限脚本 / 兼容旧调用，界面入口已强制传 ids）。
+    旧版「截图视频封面（标记）」已移除：本任务不再要求 meta.cover_mode=video_frame，
+    处理成功后会顺手清掉遗留的该标记（前端改走普通图片加载）。
     """
     cfg = cfg_mod.load()
-    id_set = {int(x) for x in (ids or []) if str(x).strip().isdigit()} or None
+    id_list = []
+    for x in (ids or []):
+        if str(x).strip().isdigit() and int(x) not in id_list:
+            id_list.append(int(x))
+    id_set = set(id_list) or None
     out_dir = frame_dir(cfg)
     con = db.connect()
     db.init(con)
     try:
-        rows = con.execute(
-            "SELECT id, file_path, poster_path, meta FROM media "
-            "WHERE instr(coalesce(meta,''), 'video_frame') > 0").fetchall()
+        if id_set is not None:
+            ph = ",".join("?" * len(id_list))
+            rows = con.execute(
+                f"SELECT id, file_path, poster_path, meta FROM media WHERE id IN ({ph})",
+                id_list).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT id, file_path, poster_path, meta FROM media").fetchall()
         targets = []
         skipped = 0
         for r in rows:
@@ -155,22 +166,23 @@ def run_frame_backfill(job, ids=None) -> dict:
         for i, r in enumerate(targets):
             if job.stop.is_set():
                 break
-            job.tick(i, total, current=r["id"])
             out = os.path.join(out_dir, f"{r['id']}.jpg")
             if not pick_bright_frame(r["file_path"], out):
                 failed += 1
                 log.warning("抽帧失败 #%s", r["id"])
-                continue
-            meta = {}
-            try:
-                meta = _json.loads(r["meta"] or "{}") or {}
-            except ValueError:
+            else:
                 meta = {}
-            meta.pop("cover_mode", None)   # 已落盘实体封面，前端改走 img
-            con.execute(
-                "UPDATE media SET poster_path=?, meta=?, updated_at=datetime('now','localtime') "
-                "WHERE id=?", (out, _json.dumps(meta, ensure_ascii=False), r["id"]))
-            extracted += 1
+                try:
+                    meta = _json.loads(r["meta"] or "{}") or {}
+                except ValueError:
+                    meta = {}
+                meta.pop("cover_mode", None)   # 已落盘实体封面，前端改走 img（顺便清掉旧版标记）
+                con.execute(
+                    "UPDATE media SET poster_path=?, meta=?, updated_at=datetime('now','localtime') "
+                    "WHERE id=?", (out, _json.dumps(meta, ensure_ascii=False), r["id"]))
+                extracted += 1
+            # 处理完一条再回报（此前用 0 起始的 i，导致进度条永远停在 (total-1)/total，看起来卡在一半）
+            job.tick(i + 1, total, current=r["id"])
             if i % 20 == 0:
                 con.commit()
         con.commit()

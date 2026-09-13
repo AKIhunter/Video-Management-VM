@@ -132,7 +132,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8080
 
 - **改 Python 代码后**需重启服务（前端是静态文件，刷新浏览器即可生效）。
 - **数据库升级**：`python -m app.cli init` 幂等执行 `schema.sql` 并自动补缺失列，不会丢数据。
-- **ffmpeg 缺失时的降级**：服务端抽帧任务会失败并推送通知；此时前端仍保留浏览器离屏抓帧兜底（`cover_mode=video_frame` 作品仍能显示，只是慢）。
+- **ffmpeg 缺失时的降级**：服务端抽帧任务会失败并推送通知；此时遗留的 `cover_mode=video_frame` 作品仍能由前端浏览器抓帧显示（只是慢）。
 
 ### 停止服务（Windows）
 

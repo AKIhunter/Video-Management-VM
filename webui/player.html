@@ -35,8 +35,85 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   padding:8px 10px;font-size:12px;margin-top:12px}
 .p-error{color:var(--muted);font-size:14px;padding:60px 20px;text-align:center}
 
+/* ---------------- 播放器下方：作品信息条（名称 / 评分 / 收藏 / 标签） ---------------- */
+.p-info{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.pi-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.pi-title{font-size:18px;font-weight:700;line-height:1.35;flex:1 1 320px;min-width:0}
+.pi-rating{display:flex;align-items:baseline;gap:6px;flex:0 0 auto}
+.pi-score{font-size:22px;font-weight:800;color:#ffc65c;line-height:1}
+.pi-score.none{color:var(--muted);font-weight:600;font-size:15px}
+.pi-votes{color:var(--muted);font-size:12px}
+.pi-fav{border:1px solid var(--line);background:var(--panel2);border-radius:9px;padding:7px 14px;font-size:13px;
+  color:var(--muted);transition:.15s;white-space:nowrap;flex:0 0 auto}
+.pi-fav:hover{border-color:var(--accent);color:var(--accent)}
+.pi-fav.on{color:var(--accent);border-color:rgba(255,92,138,.55);background:rgba(255,92,138,.12)}
+.pi-tags{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pi-tags-label{color:var(--muted);font-size:12px;flex:0 0 auto}
+.pi-tag-list{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.pi-chip{display:inline-flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:999px;padding:3px 10px;font-size:12px;color:var(--txt)}
+.pi-chip-x{color:var(--muted);font-size:13px;line-height:1;padding:0 2px;border-radius:50%}
+.pi-chip-x:hover{color:#ff6b6b}
+.pi-muted{color:var(--muted);font-size:12px}
+.pi-tag-add{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
+.pi-tag-add input{border:1px solid var(--line);background:var(--panel2);color:var(--txt);border-radius:9px;
+  padding:6px 10px;font-size:12px;outline:none;width:150px}
+.pi-tag-add input:focus{border-color:var(--accent)}
+.pi-tag-add button{border:1px solid var(--line);background:var(--panel2);border-radius:9px;padding:6px 12px;
+  font-size:12px;color:var(--muted);transition:.15s}
+.pi-tag-add button:hover{border-color:var(--accent);color:var(--accent)}
+.pi-msg{color:var(--muted);font-size:12px}
+.pi-msg.warn{color:var(--warn)}
+/* 我的评分（10 星，整数 0~10） */
+.pi-raterow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pi-stars{display:inline-flex;gap:2px;user-select:none;line-height:1}
+.pi-stars i{font-style:normal;font-size:22px;color:#3a4250;cursor:pointer;transition:transform .12s,color .12s}
+.pi-stars i:hover{transform:scale(1.15)}
+.pi-stars i.on{color:#ffc65c}
+/* 键盘操作 HUD（快进 / 快退 / 音量） */
+.p-hud{position:fixed;left:50%;bottom:34px;z-index:60;transform:translateX(-50%) translateY(8px);
+  background:rgba(11,14,19,.9);border:1px solid var(--line);color:var(--txt);border-radius:10px;
+  padding:8px 16px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
+.p-hud.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media (max-width:640px){.pi-tag-add{margin-left:0;width:100%}.pi-tag-add input{flex:1;width:auto}}
+/* TODO(预留)：评论区容器（当前 hidden，待实现后再展示） */
+.p-comments{margin-top:26px}
+
 /* ---------------- 推荐轮播 ---------------- */
-.p-reco{margin-top:26px}
+/* 上半区：播放器 + 右侧「关联作品」栏 */
+.p-layout{display:flex;gap:18px;align-items:flex-start}
+.p-main{flex:1;min-width:0}
+.p-side{flex:0 0 300px;position:sticky;top:64px;max-height:calc(100vh - 84px);overflow:auto;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+.p-side-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.p-side-title{font-size:14px;font-weight:700}
+.p-side-title:before{content:"◆";color:var(--accent);margin-right:6px}
+.p-side-sub{color:var(--muted);font-size:11px}
+.p-side-note{color:var(--muted);font-size:11px;margin-bottom:10px;line-height:1.5}
+/* 关联列表：单列；高度 ≤ 播放器高度（fitRelatedHeight 动态设置），超出显示纵向滚动条，
+   支持鼠标滚轮上下滑动与拖动滚动条翻阅 */
+.rel-list{overflow-y:auto;overflow-x:hidden;max-height:60vh;padding-bottom:4px;scrollbar-width:thin}
+.rel-item{display:flex;flex-direction:column;gap:3px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:9px;margin-bottom:8px;cursor:pointer;background:var(--panel2);transition:.15s;
+  height:56px;box-sizing:border-box;justify-content:center;flex:0 0 auto}
+.rel-item:hover{border-color:var(--accent)}
+.rel-item.playing{border-color:var(--accent);background:rgba(255,92,138,.08)}
+.rel-name{font-size:12px;font-weight:600;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}   /* 超长省略号；完整名见 title 悬停气泡 */
+.rel-meta{font-size:11px;color:var(--muted);display:flex;gap:6px;align-items:center;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rel-meta span{flex:0 0 auto}
+.rel-badge{color:var(--accent);border:1px solid rgba(255,92,138,.35);border-radius:5px;padding:0 5px;font-size:10px}
+.rel-badge.playing{color:#fff;background:var(--accent);border-color:var(--accent)}
+.rel-tag{color:var(--accent);background:rgba(255,92,138,.1);border:1px solid rgba(255,92,138,.28);
+  border-radius:4px;padding:0 5px;font-size:10px;line-height:15px}
+@media (max-width:1100px){
+  .p-layout{flex-direction:column}
+  .p-side{position:static;flex:none;width:auto;max-height:340px}
+}
+
+.p-reco{margin-top:26px;zoom:1.3;width:76.923%}   /* 卡片放大 1.3 倍：整体 zoom，宽度按 1/1.3 反向补偿，可视宽度不变 */
 .p-reco-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
 .p-reco-title{font-size:15px;font-weight:700;letter-spacing:.2px}
 .p-reco-title:before{content:"◆";color:var(--accent);margin-right:6px}
@@ -64,7 +141,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .rc-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .rc-card.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(255,92,138,.35)}
 
-.rc-thumb{position:relative;display:block;width:100%;aspect-ratio:16/9;background:#0b0e13;overflow:hidden}
+/* 缩略图高度为原 16/9 的 1.5 倍（= 16/13.5），尽量多展示图片 */
+.rc-thumb{position:relative;display:block;width:100%;aspect-ratio:16/13.5;background:#0b0e13;overflow:hidden}
 /* contain：视频帧与竖版海报都不被拉伸放大（防失真） */
 .rc-thumb img{width:100%;height:100%;object-fit:contain;display:block}
 .rc-thumb img.broken{opacity:0}
@@ -79,11 +157,16 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .rc-flag{position:absolute;top:6px;left:6px;z-index:3;background:rgba(255,92,138,.88);color:#15181f;
   border-radius:6px;padding:0 5px;font-size:10px;line-height:16px;font-weight:700}
 
-.rc-name{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-  font-size:12px;font-weight:600;line-height:1.36;padding:7px 8px 0;min-height:40px}
+/* 卡片一级标题：作品名称（超长省略号，完整名在 title 悬停提示里） */
+.rc-name{font-size:12px;font-weight:600;line-height:1.36;padding:7px 8px 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 卡片小字：日期（年月） */
+.rc-date{font-size:10px;color:var(--muted);padding:1px 8px 8px;line-height:1.3}
+/* 卡片徽章：展示具体标签（由标签 id 映射出的值） */
 .rc-why{display:flex;gap:4px;flex-wrap:wrap;padding:5px 8px 8px}
 .rc-why span{font-size:10px;line-height:15px;color:var(--accent);background:rgba(255,92,138,.1);
-  border:1px solid rgba(255,92,138,.28);border-radius:4px;padding:0 5px;white-space:nowrap}
+  border:1px solid rgba(255,92,138,.28);border-radius:4px;padding:0 5px;white-space:nowrap;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .rc-why span.muted{color:var(--muted);border-color:var(--line);background:transparent}
 
 /* 翻页按钮 */
@@ -137,11 +220,53 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 </div>
 
 <div class="p-stage" id="stage">
-  <!-- 播放窗口：宽度与下方轮播区域完全一致 -->
-  <div class="p-player" id="player">
-    <video id="video" controls autoplay playsinline></video>
-    <div class="p-warn" id="guard" style="display:none"></div>
+  <!-- 上半区：播放器 + 右侧「关联作品」栏（名称高度相似 / 同目录，可快速切换、自动连播） -->
+  <div class="p-layout">
+    <div class="p-main">
+      <div class="p-player" id="player">
+        <video id="video" controls autoplay playsinline></video>
+        <div class="p-warn" id="guard" style="display:none"></div>
+      </div>
+    </div>
+    <aside class="p-side" id="relSec" aria-label="关联作品">
+      <header class="p-side-head">
+        <span class="p-side-title">关联作品</span>
+        <span class="p-side-sub" id="relInfo">—</span>
+      </header>
+      <div class="p-side-note">按名称相似度与所在文件夹罗列 · 点击切换播放 · 播完自动连播下一个</div>
+      <div class="rel-list" id="relList"><div class="pi-muted">加载中…</div></div>
+    </aside>
   </div>
+
+  <!-- 播放器下方：作品信息（名称 / 当前评分 / 收藏 / 标签 / 我的评分）
+       标签权限：admin 可增可删；其余账号只增不删（删除按钮不渲染，后端也会 403 拦截） -->
+  <section class="p-info" id="pInfo" aria-label="作品信息">
+    <div class="pi-row">
+      <h1 class="pi-title" id="piTitle">加载中…</h1>
+      <div class="pi-rating">
+        <span class="pi-score" id="piScore">—</span>
+        <span class="pi-votes" id="piVotes"></span>
+      </div>
+      <button class="pi-fav" id="piFav" type="button" aria-pressed="false" title="收藏 / 取消收藏">☆ 收藏</button>
+    </div>
+    <!-- 我的评分：10 颗星，点第 N 颗 = N 分（0~10），再点当前最高星清除；与首页详情抽屉同一套规则 -->
+    <div class="pi-raterow">
+      <span class="pi-tags-label">我的评分</span>
+      <span class="pi-stars" id="piMyStars" role="group" aria-label="我的评分（0~10 星）"></span>
+      <span class="pi-votes" id="piMyVal">未评</span>
+    </div>
+    <div class="pi-tags">
+      <span class="pi-tags-label">标签</span>
+      <span class="pi-tag-list" id="piTags"><span class="pi-muted">暂无标签</span></span>
+      <span class="pi-tag-add">
+        <input id="piTagInput" placeholder="添加标签…" maxlength="20" list="piTagSuggest" autocomplete="off"
+               aria-label="添加标签">
+        <datalist id="piTagSuggest"></datalist>
+        <button id="piTagAdd" type="button">添加</button>
+      </span>
+    </div>
+    <div class="pi-msg" id="piMsg"></div>
+  </section>
 
   <!-- 推荐轮播：每页 2 行 × 6 列 = 12 格，不滚动 -->
   <section class="p-reco" id="recoSec">
@@ -163,7 +288,14 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
     <div class="rc-dots" id="rcDots" role="tablist" aria-label="推荐页码"></div>
     <div class="rc-pageinfo" id="rcPageInfo" aria-live="polite"></div>
   </section>
+
+  <!-- TODO(预留)：评论区 —— 轮播图下方。待实现：作品评论的增删改查 + 分页 +
+       与账号体系联动的权限（是否允许匿名 / 是否仅本人可删）。当前仅占位，不渲染任何内容。 -->
+  <section class="p-comments" id="commentSec" hidden></section>
 </div>
+
+<!-- 键盘操作反馈 HUD（快进/快退/音量），短提示后自动消失 -->
+<div class="p-hud" id="hud" role="status" aria-live="polite"></div>
 
 <script>
 "use strict";
@@ -202,6 +334,283 @@ function fmtDuration(sec){
   return m >= 60 ? (Math.floor(m/60) + "小时" + (m%60) + "分") : (m + " 分钟");
 }
 
+/* ============ 播放器下方：作品信息（名称 / 当前评分 / 收藏 / 标签） ============
+   标签权限：admin 可增可删；其余账号「只增不删」——
+   前端不渲染删除按钮，后端 DELETE /api/media/{id}/tags 也挂了 require_admin 二次拦截。 */
+var PI_TITLE = document.getElementById("piTitle");
+var PI_SCORE = document.getElementById("piScore");
+var PI_VOTES = document.getElementById("piVotes");
+var PI_FAV   = document.getElementById("piFav");
+var PI_TAGS  = document.getElementById("piTags");
+var PI_INPUT = document.getElementById("piTagInput");
+var PI_ADD   = document.getElementById("piTagAdd");
+var PI_MSG   = document.getElementById("piMsg");
+var PI_SUGG  = document.getElementById("piTagSuggest");
+
+var ME   = { id: null, role: "user" };                       // 当前账号（/api/me）
+var info = { id: null, favorite: false, tags: [], loaded: false };
+
+function isAdmin(){ return ME.role === "admin"; }
+function piMsg(text, warn){
+  PI_MSG.textContent = text || "";
+  PI_MSG.className = "pi-msg" + (warn ? " warn" : "");
+}
+
+/* 当前账号 → 决定标签能否删除。拿不到时按普通账号处理（更保守）。 */
+fetch("/api/me").then(function(r){ return r.ok ? r.json() : null; }).then(function(me){
+  if (me && me.role) ME = me;
+  if (info.loaded) renderTags();                             // 角色晚到则重画标签
+}).catch(function(){});
+
+/* 标签联想：词典里的规范标签 */
+fetch("/api/kinks").then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+  if (!d || !d.items) return;
+  PI_SUGG.innerHTML = d.items.map(function(t){
+    return '<option value="' + esc(t) + '"></option>';
+  }).join("");
+}).catch(function(){});
+
+function renderFav(){
+  PI_FAV.classList.toggle("on", !!info.favorite);
+  PI_FAV.setAttribute("aria-pressed", info.favorite ? "true" : "false");
+  PI_FAV.textContent = info.favorite ? "★ 已收藏" : "☆ 收藏";
+}
+
+function renderTags(){
+  var tags = info.tags || [];
+  if (!tags.length){
+    PI_TAGS.innerHTML = '<span class="pi-muted">暂无标签</span>';
+    return;
+  }
+  PI_TAGS.innerHTML = tags.map(function(t){
+    var x = isAdmin()
+      ? '<button class="pi-chip-x" type="button" title="删除标签" data-name="' + esc(t) + '">×</button>'
+      : "";
+    return '<span class="pi-chip">' + esc(t) + x + '</span>';
+  }).join("");
+  Array.prototype.forEach.call(PI_TAGS.querySelectorAll(".pi-chip-x"), function(b){
+    b.addEventListener("click", function(){ removeTag(b.getAttribute("data-name")); });
+  });
+}
+
+/* 载入当前作品信息（切换推荐卡片时会重新调用） */
+function loadMediaInfo(mid){
+  fetch("/api/media/" + mid).then(function(r){ return r.ok ? r.json() : null; }).then(function(m){
+    if (!m || String(mid) !== String(currentId)) return;     // 已切到别的作品 → 丢弃
+    info.id = mid;
+    info.loaded = true;
+    info.favorite = !!(m.user && m.user.favorite);
+    info.tags = m.tags || [];
+    PI_TITLE.textContent = m.title || ("#" + mid);
+    paintRating((m.rating_display != null) ? m.rating_display : m.rating_norm, m.rating_votes || 0);
+    myRating = (m.user && m.user.personal_rating != null) ? m.user.personal_rating : null;
+    renderMyStars();
+    renderFav();
+    renderTags();
+  }).catch(function(){ piMsg("作品信息加载失败", true); });
+}
+
+/* 当前评分展示（信息条大分数 + 人数） */
+function paintRating(display, votes){
+  if (display == null){
+    PI_SCORE.textContent = "暂无评分";
+    PI_SCORE.className = "pi-score none";
+  } else {
+    PI_SCORE.textContent = Number(display).toFixed(1);
+    PI_SCORE.className = "pi-score";
+  }
+  PI_VOTES.textContent = votes ? ("/ 10 · " + votes + " 人评分") : "/ 10 · 暂无用户评分";
+}
+
+/* ---------------- 我的评分（10 星整数 0~10；再点当前最高星 = 清除） ---------------- */
+var PI_MY = document.getElementById("piMyStars");
+var PI_MYVAL = document.getElementById("piMyVal");
+var myRating = null;
+
+function renderMyStars(){
+  var v = Math.round(myRating == null ? 0 : myRating);
+  var html = "";
+  for (var i = 1; i <= 10; i++){
+    html += '<i class="' + (v >= i ? "on" : "") + '" data-v="' + i + '" title="' + i + ' 分">★</i>';
+  }
+  PI_MY.innerHTML = html;
+  Array.prototype.forEach.call(PI_MY.querySelectorAll("i"), function(el){
+    el.addEventListener("click", function(){ setMyRating(parseInt(el.getAttribute("data-v"), 10)); });
+  });
+  PI_MYVAL.textContent = (myRating != null) ? (v + " 星") : "未评";
+}
+
+function setMyRating(val){
+  if (!info.id) return;
+  var next = (myRating != null && Math.round(myRating) === val) ? null : val;   // 再点当前最高星 → 清除
+  PI_MY.style.opacity = ".5";
+  fetch("/api/media/" + info.id + "/state", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ personal_rating: next })
+  }).then(function(r){
+    if (!r.ok) return r.json().then(function(e){ throw new Error(e.detail || r.status); });
+    return r.json();
+  }).then(function(d){
+    if (!d) return;
+    myRating = next;
+    renderMyStars();
+    if (d.rating && d.rating.display != null){
+      paintRating(d.rating.display, d.rating.votes);      // 后端已即时重算均值 → 就地刷新
+      showHud(next != null ? ("已评分 " + next + " 星") : "已清除评分");
+    } else if (d.rating) {
+      showHud(next != null ? ("已评分 " + next + " 星") : "已清除评分");
+    }
+  }).catch(function(e){ piMsg("评分失败：" + e.message, true); })
+   .then(function(){ PI_MY.style.opacity = ""; });
+}
+
+/* 收藏 / 取消收藏（每账号一条记录，重复操作即覆盖） */
+PI_FAV.addEventListener("click", function(){
+  if (!info.id) return;
+  var next = !info.favorite;
+  PI_FAV.disabled = true;
+  fetch("/api/media/" + info.id + "/state", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ favorite: next })
+  }).then(function(r){
+    if (!r.ok) return r.json().then(function(e){ throw new Error(e.detail || r.status); });
+    info.favorite = next;
+    renderFav();
+    piMsg(next ? "已加入收藏" : "已取消收藏");
+  }).catch(function(e){ piMsg("操作失败：" + e.message, true); })
+   .then(function(){ PI_FAV.disabled = false; });
+});
+
+/* 加标签：任何账号都可增 */
+function addTag(){
+  if (!info.id) return;
+  var name = (PI_INPUT.value || "").trim();
+  if (!name) return;
+  fetch("/api/media/" + info.id + "/tags", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name })
+  }).then(function(r){
+    if (!r.ok) return r.json().then(function(e){ throw new Error(e.detail || r.status); });
+    return r.json();
+  }).then(function(d){
+    if (!d) return;
+    info.tags = d.tags || [];
+    PI_INPUT.value = "";
+    renderTags();
+    piMsg("已添加标签");
+  }).catch(function(e){ piMsg("添加失败：" + e.message, true); });
+}
+PI_ADD.addEventListener("click", addTag);
+PI_INPUT.addEventListener("keydown", function(e){
+  if (e.key === "Enter"){ e.preventDefault(); addTag(); }
+});
+
+/* 删标签：仅 admin。前端先拦一层，后端仍会校验 */
+function removeTag(name){
+  if (!info.id || !isAdmin() || !name) return;
+  if (!window.confirm("确认删除标签「" + name + "」？")) return;
+  fetch("/api/media/" + info.id + "/tags", {
+    method: "DELETE", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name })
+  }).then(function(r){
+    if (!r.ok) return r.json().then(function(e){ throw new Error(e.detail || r.status); });
+    return r.json();
+  }).then(function(d){
+    if (!d) return;
+    info.tags = d.tags || [];
+    renderTags();
+    piMsg("已删除标签");
+  }).catch(function(e){ piMsg("删除失败：" + e.message, true); });
+}
+
+/* ---------------- 关联作品（右侧栏）：名称高度相似 + 同目录，快速切换 / 自动连播 ---------------- */
+var REL_LIST = document.getElementById("relList");
+var REL_INFO = document.getElementById("relInfo");
+var related = [];          // 当前作品的关联列表（已按相关度排序）
+
+function renderRelated(){
+  // 关联内容与顺序**固定**（首次查询时确定，第一个视频就在第一位）；
+  // 切换播放其它关联作品时**排序不变**，只把「正在播放」标记移动到对应项上。
+  if (!related.length){
+    REL_LIST.innerHTML = '<div class="pi-muted">没有找到名称相似或同目录的其它作品</div>';
+    REL_INFO.textContent = "";
+    return;
+  }
+  REL_INFO.textContent = related.length + " 部";
+  REL_LIST.innerHTML = related.map(function(it){
+    var playing = Number(it.id) === Number(currentId);
+    // 只展示作品原有的标签（不展示「同目录」等推导信息；「正在播放」为特殊标记保留）
+    var meta = [];
+    if (playing) meta.push('<span class="rel-badge playing">正在播放</span>');
+    var tags = it.tags || [];
+    tags.slice(0, 3).forEach(function(t){ meta.push('<span class="rel-tag">' + esc(t) + '</span>'); });
+    if (tags.length > 3) meta.push('<span>+' + (tags.length - 3) + '</span>');
+    return '<div class="rel-item' + (playing ? " playing" : "") + '" data-id="' + it.id + '" title="' + esc(it.title || "") + '">' +
+      '<span class="rel-name">' + esc(it.title || ("#" + it.id)) + '</span>' +
+      '<span class="rel-meta">' + meta.join("") + '</span></div>';
+  }).join("");
+  fitRelatedHeight();
+}
+
+/* 关联列表高度 ≤ 播放器高度：超出部分按列排布，拖动横向滚动条查看。
+   用 ResizeObserver 监听视频元素尺寸 —— 播放器高度随窗口 / 元数据 / 布局变化时自动跟随调整。 */
+function fitRelatedHeight(){
+  if (!REL_LIST) return;
+  if (document.fullscreenElement){                    // 全屏播放时列表不可见，恢复默认即可
+    REL_LIST.style.maxHeight = "";
+    return;
+  }
+  var h = VIDEO.clientHeight || 0;
+  if (h <= 0) return;
+  var head = document.querySelector(".p-side-head");
+  var note = document.querySelector(".p-side-note");
+  var used = 30 + (head ? head.offsetHeight : 0) + (note ? note.offsetHeight : 0);
+  REL_LIST.style.maxHeight = Math.max(160, h - used) + "px";
+}
+if (window.ResizeObserver){
+  new ResizeObserver(fitRelatedHeight).observe(VIDEO);   // 播放器任何尺寸变化都实时跟随
+} else {
+  VIDEO.addEventListener("loadedmetadata", fitRelatedHeight);   // 旧浏览器降级
+}
+window.addEventListener("resize", fitRelatedHeight);
+
+/* 关联列表只在**首次打开播放页**时查询并固定；之后切换播放不再重新查询。
+   首次查询时把「进入播放页的第一个视频」固定为列表第一位（接口本身不含当前作品）；
+   此后列表内容与顺序不再变化，切换播放只移动「正在播放」标记。 */
+var relatedLoaded = false;
+function loadRelated(mid){
+  if (relatedLoaded) { renderRelated(); return; }
+  fetch("/api/play/" + mid + "/related?limit=20").then(function(r){
+    return r.ok ? r.json() : null;
+  }).then(function(d){
+    if (!d || String(mid) !== String(currentId)) return;      // 已切到别的作品 → 丢弃
+    relatedLoaded = true;
+    related = d.items || [];
+    // 第一个视频固定在第一位：标题此时已同步写入顶栏（playId 先行），直接取用
+    related.unshift({ "id": currentId,
+                      "title": (TITLE && TITLE.textContent) || ("#" + currentId) });
+    renderRelated();
+  }).catch(function(){ relatedLoaded = true; related = []; renderRelated(); });
+}
+
+REL_LIST.addEventListener("click", function(e){
+  var el = e.target.closest(".rel-item");
+  if (el) playId(Number(el.dataset.id));                      // 快速切换播放（不跳页）
+});
+
+/* 播完自动连播：按固定列表的顺序播放「当前作品的下一个」（到末尾即停止） */
+VIDEO.addEventListener("ended", function(){
+  var idx = -1;
+  for (var i = 0; i < related.length; i++){
+    if (Number(related[i].id) === Number(currentId)) { idx = i; break; }
+  }
+  var next = (idx >= 0 && idx + 1 < related.length) ? related[idx + 1] : null;
+  if (next){
+    showHud("本集播完 → 自动播放下一个关联作品");
+    playId(next.id);
+  }
+});
+
 /* ---------------- 音量复用（跨视频/跨页面） ---------------- */
 var VOL_KEY = "player_volume";
 var savedVol = localStorage.getItem(VOL_KEY);
@@ -222,15 +631,25 @@ function playId(mid){
     document.title = name;
     TITLE.textContent = name;
     META.textContent = "#" + mid;
+    // 提示条：仅 >2GB 建议本地播放；需转码的格式说明「进度条不可拖动」
+    var notes = [];
     if (m.guard && m.guard.oversized){
+      notes.push("⚠ " + m.guard.advice + "（" + (m.guard.size / 1073741824).toFixed(1) + "GB）");
+    }
+    if (m.transcode){
+      notes.push("ℹ 该格式由服务器实时转码播放：可正常观看，但进度条不可拖动。");
+    }
+    if (notes.length){
       GUARD.style.display = "block";
-      GUARD.textContent = "⚠ " + m.guard.advice + "（" + (m.guard.size / 1073741824).toFixed(1) + "GB）";
+      GUARD.textContent = notes.join("  ");
     } else {
       GUARD.style.display = "none";
     }
   }).catch(function(){});
   VIDEO.src = "/api/play/" + mid;
   VIDEO.play().catch(function(){});
+  loadMediaInfo(mid);                            // 播放器下方信息条（名称/评分/收藏/标签）
+  loadRelated(mid);                              // 右侧关联作品（快速切换 / 自动连播）
   loadReco(mid);
   if (history.replaceState) history.replaceState(null, "", "player.html?id=" + mid);
 }
@@ -245,20 +664,31 @@ function skeleton(){
   PREV.style.display = NEXT.style.display = "none";
 }
 
-function whyChips(it){
-  var out = [];
-  if (it.shared_tags > 0) out.push(it.shared_tags + " 个相同标签");
-  if (it.reason && it.reason.indexOf("studio") >= 0) out.push("同制作组");
-  if (it.reason && it.reason.indexOf("era") >= 0) out.push("同期作品");
-  return out.slice(0, 2);
+/* 卡片徽章：只展示「具体标签」（由标签 id 映射出的值）。
+   已按要求移除「N 个相同标签」「同制作组」「同期作品」这类模糊文案；来源组（studio）不展示。 */
+var SHARED_TAG_SHOW = 3;      // 卡片上最多显示几个标签（超出用 +N 折叠）
+
+function tagChips(it){
+  var names = it.shared_tag_names || [];
+  if (!names.length) return "";
+  var show = names.slice(0, SHARED_TAG_SHOW);
+  var html = show.map(function(t){ return "<span title=\"" + esc(t) + "\">" + esc(t) + "</span>"; }).join("");
+  if (names.length > show.length) html += '<span class="muted">+' + (names.length - show.length) + "</span>";
+  return html;
+}
+
+/* 日期（小字）：优先 publish_date（取 YYYY-MM），缺失时退回年份 */
+function fmtPublish(it){
+  var d = it.publish_date || "";
+  if (d && d.length >= 7) return d.slice(0, 7);
+  if (it.year) return String(it.year);
+  return "";
 }
 
 function cardHTML(it){
   var rating = (it.rating_norm != null) ? Number(it.rating_norm).toFixed(1) : "";
-  var chips = whyChips(it);
-  var why = chips.map(function(t){ return "<span>" + esc(t) + "</span>"; }).join("");
-  var dur = fmtDuration(it.duration_sec);
-  if (!chips.length && dur) why = '<span class="muted">' + esc(dur) + "</span>";
+  var why = tagChips(it);              // 次级：标签
+  var pub = fmtPublish(it);            // 小字：日期（年月）
   var active = (it.id === currentId) ? " active" : "";
   return '<a class="rc-card' + active + '" href="#" data-id="' + it.id + '" title="' + esc(it.title || "") + '">'
     + '<span class="rc-thumb">'
@@ -270,8 +700,9 @@ function cardHTML(it){
     +     '<path d="M9.6 7.8v8.4l7-4.2z" fill="#15181f"/></svg>'
     +   "</span>"
     + "</span>"
-    + '<span class="rc-name">' + esc(it.title || ("#" + it.id)) + "</span>"
-    + (why ? '<span class="rc-why">' + why + "</span>" : "")
+    + '<span class="rc-name">' + esc(it.title || ("#" + it.id)) + "</span>"      // 一级标题：作品名称
+    + (why ? '<span class="rc-why">' + why + "</span>" : "")                     // 次级：标签
+    + '<span class="rc-date">' + esc(pub || ("#" + it.id)) + "</span>"           // 小字：年月
     + "</a>";
 }
 
@@ -340,9 +771,9 @@ function markActive(){
 
 function setSub(profile, total){
   if (!profile){ SUBS.textContent = ""; return; }
+  // 不再展示制作组；标签只给数量（不给模糊的「相同标签」文案）
   var bits = [];
   if (profile.tag_count) bits.push(profile.tag_count + " 个标签");
-  if (profile.studio) bits.push(esc(profile.studio));
   if (profile.year) bits.push(profile.year + " 年");
   bits.push("共 " + (profile.candidate_total || total || 0) + " 部候选");
   SUBS.innerHTML = "基于 " + bits.join(" · ") + " 智能排序";
@@ -418,12 +849,54 @@ AUTO_BTN.addEventListener("click", function(){
   restartAuto();
 });
 
+/* ---------------- 键盘控制（全局，输入框内除外） ----------------
+   ← / →  ：视频快退 / 快进（±15 秒；按住 Ctrl 为 ±30 秒）
+   ↑ / ↓  ：音量 +5% / -5%（同步写入音量记忆）
+   方向键不再用于轮播翻页（翻页用两侧箭头按钮 / 圆点 / 自动轮播 / 换一批）。 */
+var SEEK_STEP = 15;        // 普通步进（秒）
+var SEEK_STEP_CTRL = 30;   // 按住 Ctrl 的步进（秒）
+var VOLUME_STEP = 0.05;    // 音量步进（5%）
+
+function seekBy(sec){
+  try {
+    var dur = isFinite(VIDEO.duration) ? VIDEO.duration : 0;
+    var t = (VIDEO.currentTime || 0) + sec;
+    t = Math.min(Math.max(0, t), dur > 0 ? Math.max(0, dur - 0.1) : t);
+    VIDEO.currentTime = t;
+    showHud((sec > 0 ? "» 快进 " : "« 快退 ") + Math.abs(sec) + " 秒");
+  } catch (err) { /* seek 未就绪时忽略 */ }
+}
+
+function volumeBy(delta){
+  var v = Math.round((VIDEO.volume + delta) * 100) / 100;   // 规避浮点误差
+  v = Math.min(1, Math.max(0, v));
+  VIDEO.volume = v;
+  showHud("音量 " + Math.round(v * 100) + "%" + (v === 0 ? "（静音）" : ""));
+}
+
+var HUD = document.getElementById("hud");
+var HUD_TIMER = null;
+function showHud(text){
+  if (!HUD) return;
+  HUD.textContent = text;
+  HUD.classList.add("show");
+  clearTimeout(HUD_TIMER);
+  HUD_TIMER = setTimeout(function(){ HUD.classList.remove("show"); }, 1100);
+}
+
 document.addEventListener("keydown", function(e){
-  if (e.target === VIDEO) return;                       // 不抢播放器方向键
   var tag = (e.target.tagName || "").toLowerCase();
-  if (tag === "input" || tag === "textarea" || tag === "select") return;
-  if (e.key === "ArrowRight") go(reco.page + 1);
-  else if (e.key === "ArrowLeft") go(reco.page - 1);
+  if (tag === "input" || tag === "textarea" || tag === "select") return;   // 打字 / 选下拉时不抢键
+  var big = e.ctrlKey || e.metaKey;
+  var handled = true;
+  switch (e.key) {
+    case "ArrowRight": seekBy(big ? SEEK_STEP_CTRL : SEEK_STEP); break;
+    case "ArrowLeft":  seekBy(big ? -SEEK_STEP_CTRL : -SEEK_STEP); break;
+    case "ArrowUp":    volumeBy(VOLUME_STEP); break;
+    case "ArrowDown":  volumeBy(-VOLUME_STEP); break;
+    default: handled = false;
+  }
+  if (handled) e.preventDefault();
 });
 
 document.addEventListener("visibilitychange", function(){

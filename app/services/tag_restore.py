@@ -12,14 +12,14 @@
 约定与约束：
   - 只匹配库内**已存在**的标签（名称完全相同）；**不新建标签、不写入任何标签名**；
     media_tags 只写 id，保持「关联表只存 id」的设计；
-  - 每作品仍受 tagdict.TAG_LIMIT 上限保护，超出计入 capped；
+  - 每作品仍受 kinks.TAG_LIMIT 上限保护，超出计入 capped；
   - 库中不存在的 media_id 计入 missing_media；
   - 名称仅在内存中用于匹配，不落库、不打印（调用方只输出计数）。
 """
 import json
 
 from .. import db
-from .tagdict import TAG_LIMIT
+from .kinks import TAG_LIMIT
 
 
 def parse_export(data) -> list:

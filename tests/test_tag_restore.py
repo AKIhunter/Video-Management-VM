@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import db  # noqa: E402
 from app.services import tag_restore  # noqa: E402
-from app.services.tagdict import TAG_LIMIT  # noqa: E402
+from app.services.kinks import TAG_LIMIT  # noqa: E402
 
 
 def _mk_db(tmp_path, monkeypatch):

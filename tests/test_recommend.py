@@ -165,3 +165,87 @@ def test_missing_source_returns_empty(tmp_path, monkeypatch):
     _add(con, 1, "作品1")
     r = rec.recommend(con, 999, uid=1)
     assert r["pages"] == [] and r["page_count"] == 0
+
+
+# ---------------- 卡片展示字段：具体标签 + 发布时间 ----------------
+def _tag_with_name(con, tid, name):
+    con.execute("INSERT OR IGNORE INTO tags(id, name) VALUES(?,?)", (tid, name))
+    con.commit()
+
+
+def test_card_shows_concrete_shared_tag_names(tmp_path, monkeypatch):
+    """卡片徽章用「具体标签」替代「N 个相同标签」这类模糊文案。"""
+    con = _mk_cfg(tmp_path, monkeypatch)
+    for tid, nm in ((7, "AAA"), (8, "BBB"), (9, "CCC")):
+        _tag_with_name(con, tid, nm)
+    for i in range(1, 21):
+        _add(con, i, f"作品{i}", rating=0.5)
+    for t in (7, 8, 9):
+        _tag(con, 1, t)                      # 当前作品：AAA/BBB/CCC
+    _tag(con, 2, 7)                          # 与当前作品共享 AAA、BBB
+    _tag(con, 2, 8)
+
+    r = rec.recommend(con, 1, uid=1, per_page=20, pages=1, seed=5)
+    by_id = {it["id"]: it for it in _flatten(r)}
+    assert by_id[2]["shared_tags"] == 2
+    assert by_id[2]["shared_tag_names"] == ["AAA", "BBB"]   # 按标签 id 升序
+    # 无共享标签的候选：列表为空（而不是模糊文案）
+    other = next(it for i, it in by_id.items() if i not in (1, 2))
+    assert other["shared_tag_names"] == []
+
+
+def test_shared_tag_names_are_capped(tmp_path, monkeypatch):
+    con = _mk_cfg(tmp_path, monkeypatch)
+    n = rec.SHARED_TAG_LIMIT + 4
+    for tid in range(1, n + 1):
+        _tag_with_name(con, tid, f"T{tid:02d}")
+    for i in range(1, 11):
+        _add(con, i, f"作品{i}", rating=0.5)
+    for tid in range(1, n + 1):
+        _tag(con, 1, tid)
+        _tag(con, 2, tid)
+
+    r = rec.recommend(con, 1, uid=1, per_page=10, pages=1, seed=2)
+    item = next(it for it in _flatten(r) if it["id"] == 2)
+    assert item["shared_tags"] == n
+    assert len(item["shared_tag_names"]) == rec.SHARED_TAG_LIMIT
+
+
+def test_card_returns_publish_date(tmp_path, monkeypatch):
+    """卡片文字行改为展示发布时间，接口需回传 publish_date。"""
+    con = _mk_cfg(tmp_path, monkeypatch)
+    for i in range(1, 6):
+        _add(con, i, f"作品{i}", rating=0.5)
+    con.execute("UPDATE media SET publish_date='2023-07-01' WHERE id=2")
+    con.commit()
+    r = rec.recommend(con, 1, uid=1, per_page=10, pages=1, seed=4)
+    item = next(it for it in _flatten(r) if it["id"] == 2)
+    assert item["publish_date"] == "2023-07-01"
+
+
+# ---------------- 候选范围：按当前作品分类推荐（真人 / 视频 / 未来新分类） ----------------
+def test_recommends_stay_in_same_category(tmp_path, monkeypatch):
+    """同分类硬过滤：视频作品只推荐视频，其它分类（真人等）不混入。"""
+    con = _mk_cfg(tmp_path, monkeypatch)
+    _add(con, 1, "当前-视频", category="视频")
+    for i in range(2, 12):
+        _add(con, i, f"同类{i}", category="视频", rating=0.5)
+    for i in range(20, 30):
+        _add(con, i, f"真人{i}", category="真人", rating=0.9)   # 更高分也不该跨分类出现
+
+    r = rec.recommend(con, 1, uid=1, per_page=6, pages=1, seed=3)
+    flat = _flatten(r)
+    assert r["scope"] == "same_category"
+    assert all(it["category"] == "视频" for it in flat)
+    assert not any(it["id"] >= 20 for it in flat)
+
+
+def test_fallback_all_when_same_category_empty(tmp_path, monkeypatch):
+    """同分类没有其他作品 → 兜底放开分类（scope=fallback_all），避免轮播整块空白。"""
+    con = _mk_cfg(tmp_path, monkeypatch)
+    _add(con, 1, "当前-真人", category="真人")
+    for i in range(2, 6):
+        _add(con, i, f"其它{i}", category="视频", rating=0.5)
+    r = rec.recommend(con, 1, uid=1, per_page=4, pages=1, seed=1)
+    assert r["scope"] == "fallback_all"
+    assert len(_flatten(r)) > 0

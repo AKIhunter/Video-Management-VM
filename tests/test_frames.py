@@ -164,3 +164,69 @@ def test_run_frame_backfill_skips_existing_poster(tmp_path, monkeypatch):
 
     r = frames.run_frame_backfill(_J(), ids=[1])
     assert r["extracted"] == 0 and r["skipped"] == 1
+
+
+# ---------------- 进度回报：必须能到 100%（修复进度条卡在一半） ----------------
+def test_frame_progress_reaches_total(tmp_path, monkeypatch):
+    """处理完最后一条后 done 必须等于 total（此前用 0 起始的 i 回报，进度条永远差一格）。"""
+    exe = _ffmpeg()
+    video = tmp_path / "vid3.mp4"
+    _make_video(exe, str(video), color="blue", seconds=6)
+    video2 = tmp_path / "vid4.mp4"
+    _make_video(exe, str(video2), color="red", seconds=6)
+
+    cfg = {
+        "db_path": str(tmp_path / "t3.db"),
+        "frames_dir": str(tmp_path / "frames3"),
+        "ffmpeg_path": "", "roots": [], "category_filter": ["视频"], "default_user_id": 1,
+        "log_dir": str(tmp_path / "logs3"), "log_level": "INFO",
+    }
+    monkeypatch.setattr(config_mod, "load", lambda: dict(cfg))
+
+    con = db.connect()
+    db.init(con)
+    for mid, fp in ((1, str(video)), (2, str(video2))):
+        con.execute(
+            "INSERT INTO media(id, category, title, file_path, poster_path, meta, edited_fields) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (mid, "视频", f"测试{mid}", fp, "", "{}", "[]"))
+    con.commit()
+    con.close()
+
+    ticks = []
+
+    class _J:
+        stop = threading.Event()
+        def tick(self, done, total=None, current=None):
+            ticks.append((done, total))
+
+    r = frames.run_frame_backfill(_J(), ids=[1, 2])
+    assert r["total"] == 2 and r["extracted"] == 2
+    assert ticks, "至少回报一次进度"
+    assert ticks[-1][0] == ticks[-1][1] == 2        # 最后一格 done == total
+
+
+def test_frame_backfill_requires_scope_ids(tmp_path, monkeypatch):
+    """未传 ids 时不再按旧版「video_frame 标记」筛选：无命中 → 目标 0（界面入口已强制传 ids）。"""
+    cfg = {
+        "db_path": str(tmp_path / "t4.db"),
+        "frames_dir": str(tmp_path / "frames4"),
+        "ffmpeg_path": "", "roots": [], "category_filter": ["视频"], "default_user_id": 1,
+        "log_dir": str(tmp_path / "logs4"), "log_level": "INFO",
+    }
+    monkeypatch.setattr(config_mod, "load", lambda: dict(cfg))
+    con = db.connect()
+    db.init(con)
+    con.execute(
+        "INSERT INTO media(id, category, title, file_path, poster_path, meta, edited_fields) "
+        "VALUES(1,'视频','测试','/nonexistent.mp4','','{\"cover_mode\":\"video_frame\"}','[]')")
+    con.commit()
+    con.close()
+
+    class _J:
+        stop = threading.Event()
+        def tick(self, done, total=None, current=None):
+            pass
+
+    r = frames.run_frame_backfill(_J())      # 不传 ids = 全库（文件不存在 → 跳过）
+    assert r["total"] == 0 and r["skipped"] == 1

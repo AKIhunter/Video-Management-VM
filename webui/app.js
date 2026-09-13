@@ -1,12 +1,58 @@
 /* 视频管理器 前端逻辑（轻量原生 JS） */
 const app = {
-  state: { page: 1, total: 0, size: 30, loading: false, _reqToken: 0, categories: [], years: [], _ids: [], _tagdict: [], _reviews: [], _revIndex: -1, _revDone: null, _tags: [] },
+  state: { page: 1, total: 0, size: 30, loading: false, _reqToken: 0, categories: [], years: [], _ids: [], _kinks: [], _reviews: [], _revIndex: -1, _revDone: null, _tags: [],
+           _loadedCount: 0, _cap: 600, _myRating: null, _dupGroups: [], _dupPage: 0, _dupIgnored: 0 },
+
+  // 主界面一次自动加载最多渲染的卡片数（防止无限滚动把 DOM/内存撑爆 OOM）；
+  // 触顶后停止自动加载，改为显示「点击继续」按钮，由用户手动抬高上限。
+  OOM_CARD_STEP: 600,
+
+  // 筛选栏持久化：sessionStorage —— 刷新浏览器保留，关闭标签页/新会话即清空（除非切换 session）
+  _FILTER_KEY: "vm.filters.v1",
+  saveFilters() {
+    try {
+      sessionStorage.setItem(this._FILTER_KEY, JSON.stringify({
+        q: document.getElementById("q").value,
+        cat: document.getElementById("fCat").value,
+        status: document.getElementById("fStatus").value,
+        year: document.getElementById("fYear").value,
+        month: document.getElementById("fMonth").value,
+        min: document.getElementById("fMin").value,
+        fav: document.getElementById("fFav").checked,
+        sort: document.getElementById("fSort").value,
+        size: document.getElementById("pageSize").value,
+        tags: this.state._tags || [],
+      }));
+    } catch (e) { /* 隐私模式等不可写时静默降级 */ }
+  },
+  restoreFilters() {
+    let f = null;
+    try { f = JSON.parse(sessionStorage.getItem(this._FILTER_KEY) || "null"); } catch (e) { f = null; }
+    if (!f || typeof f !== "object") return;
+    const setVal = (id, v) => {
+      const el = document.getElementById(id);
+      if (el && v != null && v !== "") el.value = v;
+    };
+    const q = document.getElementById("q");
+    if (q && f.q) q.value = f.q;
+    setVal("fCat", f.cat); setVal("fStatus", f.status); setVal("fYear", f.year);
+    setVal("fMonth", f.month); setVal("fMin", f.min); setVal("fSort", f.sort);
+    setVal("pageSize", f.size);
+    if (f.size) this.state.size = parseInt(f.size) || this.state.size;
+    const fav = document.getElementById("fFav");
+    if (fav) fav.checked = !!f.fav;
+    this.state._tags = Array.isArray(f.tags) ? f.tags.slice(0, 50) : [];
+  },
 
   async api(url, opts) {
     const r = await fetch(url, Object.assign({}, opts));
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     return r.json();
   },
+
+  // 当前账号角色：admin 才显示「白屏管理」、才渲染标签删除按钮
+  // （标签规则：admin 可增可删；其余账号只增不删，后端 DELETE 亦有 require_admin 拦截）
+  isAdmin() { return ((this.state._me || {}).role) === "admin"; },
 
   qs() {
     const p = new URLSearchParams();
@@ -36,11 +82,12 @@ const app = {
       anchor: document.getElementById("fTagBtn"),
       selected: this.state._tags || [],
       title: "标签筛选",
-      hint: "满足任一标签即显示（OR）",
+      hint: "即点即筛 · 满足任一标签即显示（OR）",
+      live: true,                     // 勾选即生效：无需点「应用」
       onApply: (names) => {
         this.state._tags = names;
         this.renderSelectedTags();
-        this.state.page = 1;
+        this.resetPaging();
         this.load();
       },
     });
@@ -65,6 +112,7 @@ const app = {
       selected: new Set((opts.selected || []).filter(Boolean)),
       title: opts.title || "选择标签",
       hint: opts.hint || "多选",
+      live: !!opts.live,              // live=true：勾选即生效（筛选栏用）；批量打标签/作品编辑仍需「应用」
       onApply: typeof opts.onApply === "function" ? opts.onApply : null,
     };
     p.classList.add("open");
@@ -90,6 +138,9 @@ const app = {
     if (title) title.textContent = pk.title || "选择标签";
     const hint = document.getElementById("fTagHint");
     if (hint) hint.textContent = pk.hint || "多选";
+    // 即点即筛模式没有「应用」这一步（勾选即生效），隐藏按钮避免误操作
+    const applyBtn = document.getElementById("fTagApplyBtn");
+    if (applyBtn) applyBtn.style.display = pk.live ? "none" : "";
   },
 
   // 气泡用 fixed 定位并由 JS 计算坐标：始终贴在锚点下方、且渲染在最顶层
@@ -147,7 +198,16 @@ const app = {
     });
     this.updateTagHint();
   },
-  onTagOptChange() { this.updateTagHint(); },
+  onTagOptChange() {
+    this.updateTagHint();
+    // 即点即筛（筛选栏）：勾选/取消立刻同步到筛选与展示框，无需点「应用」
+    const pk = this.state._picker;
+    if (!pk || !pk.live || typeof pk.onApply !== "function") return;
+    const names = [...document.querySelectorAll('#fTagCols input[name="fTagOpt"]:checked')]
+      .map(cb => cb.value);
+    pk.selected = new Set(names);
+    pk.onApply(names);
+  },
   updateTagHint() {
     const n = document.querySelectorAll('#fTagCols input[name="fTagOpt"]:checked').length;
     const pk = this.state._picker || {};
@@ -157,6 +217,12 @@ const app = {
   clearTagFilter() {
     document.querySelectorAll('#fTagCols input[name="fTagOpt"]').forEach(cb => { cb.checked = false; });
     this.updateTagHint();
+    // 即点即筛模式：清空也立刻生效
+    const pk = this.state._picker;
+    if (pk && pk.live && typeof pk.onApply === "function") {
+      pk.selected = new Set();
+      pk.onApply([]);
+    }
   },
   // 统一「应用」：按当前上下文分派（筛选 / 批量打标签 / 作品编辑）
   applyTagPicker() {
@@ -169,7 +235,7 @@ const app = {
     // 兜底：默认按筛选处理
     this.state._tags = names;
     this.renderSelectedTags();
-    this.state.page = 1;
+    this.resetPaging();
     this.load();
   },
   // 兼容旧调用名（筛选栏「应用」）
@@ -179,7 +245,7 @@ const app = {
     if (this.state._picker) this.state._picker.selected = new Set(this.state._tags);
     this.syncTagChecks();
     this.renderSelectedTags();
-    this.state.page = 1;
+    this.resetPaging();
     this.load();
   },
   renderSelectedTags() {
@@ -194,19 +260,24 @@ const app = {
       : '<span class="muted">未选择标签</span>';
   },
 
-  debounce() { clearTimeout(this._t); this._t = setTimeout(() => { this.state.page = 1; this.load(); }, 300); },
-  apply() { this.state.page = 1; this.load(); },
+  resetPaging() {
+    this.state.page = 1;
+    this.state._cap = this.OOM_CARD_STEP;
+    this.state._loadedCount = 0;
+  },
+  debounce() { clearTimeout(this._t); this._t = setTimeout(() => { this.resetPaging(); this.load(); }, 300); },
+  apply() { this.resetPaging(); this.load(); },
 
   // 年份变化时重置月份（月份下拉始终全量，年份单独作用于查询）
   onYearChange() {
     document.getElementById("fMonth").value = "";
-    this.state.page = 1;
+    this.resetPaging();
     this.load();
   },
 
   changePageSize() {
     this.state.size = parseInt(document.getElementById("pageSize").value) || 30;
-    this.state.page = 1;
+    this.resetPaging();
     this.load();
   },
 
@@ -229,14 +300,17 @@ const app = {
     const token = ++this.state._reqToken;
     if (append && this.state.loading) return;  // 追加模式防并发（筛选/翻页不拦截）
     this.state.loading = true;
+    if (!append) this.saveFilters();           // 全新查询 → 落盘筛选栏状态（刷新后恢复）
     try {
       const data = await this.api("/api/media?" + this.qs());
       if (token !== this.state._reqToken) return;  // 丢弃过期响应
       this.state.total = data.total;
       if (append) {
         appendGrid(data.items);
+        this.state._loadedCount += (data.items || []).length;
       } else {
         renderGrid(data.items);
+        this.state._loadedCount = (data.items || []).length;
         window.scrollTo({ top: 0, behavior: "auto" });
       }
       document.getElementById("pageInfo").textContent =
@@ -247,7 +321,8 @@ const app = {
     } finally {
       if (token === this.state._reqToken) {
         this.state.loading = false;
-        if (append) setTimeout(() => this.checkLoadMore(), 0);
+        // 渲染完成后：刷新底部「加载更多」按钮 + 检查是否需要继续补页（首屏不满也自动补齐）
+        setTimeout(() => { this.paintLoadMore(); this.checkLoadMore(); }, 0);
       }
     }
   },
@@ -261,26 +336,57 @@ const app = {
   },
 
   nextPage() {
+    if (this.state.loading) return;
     const maxPage = Math.max(1, Math.ceil(this.state.total / this.state.size));
-    if (this.state.page >= maxPage || this.state.loading) return;
+    if (this.state.page >= maxPage) return;
+    // 内存守卫：本次已渲染到上限 → 停止自动追加，提示用户手动继续
+    if (this.state._loadedCount >= this.state._cap) { this.showLoadMoreHint(); return; }
     this.state.page += 1;
     this.load(true);
   },
 
-  checkLoadMore() {
+  showLoadMoreHint() {
     const el = document.getElementById("loadMore");
-    if (!el || this.state.loading) return;
-    const rect = el.getBoundingClientRect();
+    if (!el) return;
     const maxPage = Math.max(1, Math.ceil(this.state.total / this.state.size));
-    if (this.state.page < maxPage && rect.top < window.innerHeight + 400) {
-      this.nextPage();
-    }
+    if (this.state.page >= maxPage) { el.innerHTML = ""; return; }
+    el.innerHTML = `<div class="loadmore-hint">已加载 ${this.state._loadedCount} 部 · 达本次上限` +
+      `（防止页面卡顿/内存溢出）<button class="btn" onclick="app.loadMoreManual()">继续加载下一页</button></div>`;
+  },
+
+  // 底部按钮：始终可用的手动兜底（自动触发失败时点一下也能继续）
+  loadMoreManual() {
+    if (this.state.loading) return;
+    if (this.state._loadedCount >= this.state._cap) this.state._cap += this.OOM_CARD_STEP;
+    const el = document.getElementById("loadMore");
+    if (el) el.innerHTML = '<div class="muted" style="padding:14px">加载中…</div>';
+    this.nextPage();
+  },
+
+  paintLoadMore() {
+    const el = document.getElementById("loadMore");
+    if (!el) return;
+    const maxPage = Math.max(1, Math.ceil(this.state.total / this.state.size));
+    if (this.state.page >= maxPage) { el.innerHTML = ""; return; }
+    const capped = this.state._loadedCount >= this.state._cap;
+    el.innerHTML = `<div class="loadmore-hint">已加载 ${this.state._loadedCount} 部` +
+      (capped ? ` · 达本次上限（防卡顿/内存溢出）` : "") +
+      ` <button class="btn" onclick="app.loadMoreManual()">加载更多</button></div>`;
+  },
+
+  checkLoadMore() {
+    if (this.state.loading) return;
+    const doc = document.documentElement;
+    const top = window.scrollY || doc.scrollTop || 0;
+    const dist = doc.scrollHeight - top - window.innerHeight;   // 距底部还有多少 px
+    if (dist < 600) this.nextPage();
   },
 
   async openDetail(id) {
     this.closeTagPanel();
     this.loadKinks();
     const m = await this.api("/api/media/" + id);
+    this.state._myRating = m.user.personal_rating;
     const guard = await this.api("/api/play/" + id + "/meta").catch(() => null);
     document.getElementById("drawer").innerHTML = drawerHTML(m, guard);
     initFrameCovers(document.getElementById("drawer"), { source: "detail" });  // 详情页banner：权威来源
@@ -289,19 +395,30 @@ const app = {
   closeDetail() { document.getElementById("overlay").classList.remove("show"); },
 
   async setState(mid, patch) {
-    await this.api("/api/media/" + mid + "/state", {
+    const res = await this.api("/api/media/" + mid + "/state", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    document.getElementById("detailStatus").value = patch.status ?? document.getElementById("detailStatus").value;
+    const sel = document.getElementById("detailStatus");
+    if (sel && patch.status !== undefined) sel.value = patch.status;
+    return res;
   },
 
-  // 点击星星评分（0.5 步进）
+  // 点击第 N 颗星 → 前 N 颗亮起，本次得分 = N（10 星制）；再点当前最高星 → 清除本次评分
   async setRating(mid, val) {
-    await this.setState(mid, { personal_rating: val });
-    document.getElementById("myStars").innerHTML = myStarsHTML(mid, val);
-    document.getElementById("detailMyRating").textContent = val != null ? val.toFixed(1) : "未评";
+    const cur = this.state._myRating;
+    const next = (cur != null && Math.round(cur) === val) ? null : val;
+    let res;
+    try { res = await this.setState(mid, { personal_rating: next }); }
+    catch (e) { alert("评分失败：" + e.message); return; }
+    this.state._myRating = next;
+    const stars = document.getElementById("myStars");
+    if (stars) stars.innerHTML = myStarsHTML(mid, next);
+    const lab = document.getElementById("detailMyRating");
+    if (lab) lab.textContent = next != null ? `${next} 星` : "未评";
+    // 后端已即时重算均值：同步刷新主界面卡片角标与详情页大分数
+    if (res && res.rating) applyRatingEverywhere(mid, res.rating.display, res.rating.votes);
   },
 
   async addTag(mid) {
@@ -319,6 +436,7 @@ const app = {
   },
 
   async removeTag(mid, name) {
+    if (!this.isAdmin()) return alert("仅管理员可以删除标签（普通账号可增加标签）");
     try {
       const d = await this.api("/api/media/" + mid + "/tags", {
         method: "DELETE", headers: { "Content-Type": "application/json" },
@@ -330,12 +448,12 @@ const app = {
 
   // ---- 标签联想（题材表优先 + 模糊搜索）----
   async loadKinks() {
-    if (this.state._tagdict.length) return this.state._tagdict;
+    if (this.state._kinks.length) return this.state._kinks;
     try {
-      const d = await this.api("/api/tagdict");
-      this.state._tagdict = d.items || [];
-    } catch { this.state._tagdict = []; }
-    return this.state._tagdict;
+      const d = await this.api("/api/kinks");
+      this.state._kinks = d.items || [];
+    } catch { this.state._kinks = []; }
+    return this.state._kinks;
   },
 
   tagSuggest(mid) {
@@ -343,8 +461,8 @@ const app = {
     const box = document.getElementById("tagSuggest");
     const kw = (input.value || "").trim().toLowerCase();
     if (!kw || !box) { if (box) box.style.display = "none"; return; }
-    const tagdict = this.state._tagdict || [];
-    const hits = tagdict.filter(t => t.toLowerCase().includes(kw));
+    const kinks = this.state._kinks || [];
+    const hits = kinks.filter(t => t.toLowerCase().includes(kw));
     if (!hits.length) { box.style.display = "none"; return; }
     box.innerHTML = hits.slice(0, 8).map(t =>
       `<div class="tag-suggest-item" onclick="app.pickTagSuggestion(${mid}, this.textContent)">${esc(t)}</div>`).join("");
@@ -638,6 +756,7 @@ const app = {
     fill("scanCategory", false);
     fill("aCategory", true);
     fill("mgCategory", true);
+    fill("dupCategory", true);     // 重复检测：选择要检测的分类
     fill("mgMoveTo", false, "");   // 移动目标：仅列出分类，无“全部”
     return items;
   },
@@ -706,9 +825,17 @@ const app = {
     await this.manageSearch();
   },
   manageReset() {
+    // 「重置」= 清空展示列表（不重新查询）
     document.getElementById("mgQ").value = "";
+    document.getElementById("mgList").innerHTML =
+      '<div class="empty">已清空展示列表（输入条件后点「查询」重新加载）</div>';
+    const info = document.getElementById("mgPageInfo");
+    if (info) info.textContent = "";
+    this.state._mgPicked = new Set();
+    this.state._mgItems = [];
+    this.state._mgTotal = 0;
     this.state._mgPage = 1;
-    this.manageSearch();
+    this.mgUpdateSel();
   },
   managePage(d) {
     const p = (this.state._mgPage || 1) + d;
@@ -814,6 +941,156 @@ const app = {
       await this.loadCategories();
       this.manageSearch();
     } catch (e) { this.mgMsg("删除失败：" + e.message, true); }
+  },
+
+  // ---- 作品管理：重复作品检测（按分类 · 逐组展示 → 人工去重 / 本组忽略）----
+  async dupScan() {
+    const cat = document.getElementById("dupCategory").value;
+    const thr = parseFloat(document.getElementById("dupThreshold").value) || 0.86;
+    const box = document.getElementById("dupList");
+    const info = document.getElementById("dupInfo");
+    box.innerHTML = '<div class="muted">检测中…</div>';
+    info.textContent = "—";
+    const p = new URLSearchParams();
+    if (cat) p.set("category", cat);
+    p.set("threshold", thr);
+    let d;
+    try { d = await this.api("/api/admin/media/duplicates?" + p.toString()); }
+    catch (e) { box.innerHTML = `<div class="warn">检测失败：${esc(e.message)}</div>`; return; }
+    this.state._dupGroups = d.groups || [];
+    this.state._dupPage = 0;
+    this.state._dupIgnored = d.ignored_groups || 0;
+    const n = this.state._dupGroups.length;
+    info.textContent = `共扫 ${d.scanned} 部 · ${n} 组相似` +
+      (d.ignored_groups ? ` · 已忽略 ${d.ignored_groups} 组` : "") +
+      (d.truncated ? "（已达单次扫描上限，请分分类检测）" : "");
+    if (!n) {
+      box.innerHTML = '<div class="empty">该分类下未发现高度相似的作品</div>';
+      const pos = document.getElementById("dupPos");
+      if (pos) pos.textContent = "—";
+      return;
+    }
+    this.dupRender();
+  },
+
+  // 逐组展示：一次只渲染一组；删除 / 忽略都只作用于当前组
+  dupRender() {
+    const box = document.getElementById("dupList");
+    const pos = document.getElementById("dupPos");
+    const gs = this.state._dupGroups || [];
+    if (!gs.length) {
+      box.innerHTML = '<div class="empty">没有待处理的相似分组（可点「检测相似作品」重新检测）</div>';
+      if (pos) pos.textContent = "—";
+      return;
+    }
+    const i = Math.min(this.state._dupPage || 0, gs.length - 1);
+    this.state._dupPage = i;
+    const g = gs[i];
+    if (pos) pos.textContent = `第 ${i + 1} / ${gs.length} 组`;
+    const ig = document.getElementById("dupIgnored");
+    if (ig) ig.textContent = this.state._dupIgnored ? `已忽略 ${this.state._dupIgnored} 组` : "";
+    box.innerHTML = `
+      <div class="dup-group">
+        <div class="dup-head">
+          <label class="dup-all" title="全选 / 全不选本组">
+            <input type="checkbox" id="dupAllChk" onchange="app.dupSelectAll(this.checked)">
+            <span>组 ${i + 1} / ${gs.length} · ${g.items.length} 部　<span class="muted">勾选的将被删除，不勾选不受任何影响</span></span>
+          </label>
+          <button class="btn dup-ignore" onclick="app.dupIgnore()" title="记录这组标题，之后重复检测不再列出">本组忽略</button>
+        </div>
+        ${g.items.map(it => `
+          <label class="dup-row">
+            <input type="checkbox" name="dupPick" value="${it.id}">
+            <span class="dup-id">#${it.id}</span>
+            <span class="dup-title">${esc(it.title || it.title_jp || "")}</span>
+            <span class="muted">${it.year ?? ""}</span>
+            <span class="muted">${it.has_cover ? "有封面" : "无封面"}</span>
+          </label>`).join("")}
+      </div>`;
+  },
+
+  dupNav(d) {
+    const gs = this.state._dupGroups || [];
+    if (!gs.length) return;
+    const next = Math.min(gs.length - 1, Math.max(0, (this.state._dupPage || 0) + d));
+    if (next === this.state._dupPage) return;
+    this.state._dupPage = next;
+    this.dupRender();
+  },
+
+  // 全选 / 全不选：只作用于**当前展示的组**（每次只渲染一组，天然只影响本组）
+  dupSelectAll(on) {
+    document.querySelectorAll('#dupList input[name="dupPick"]').forEach(cb => { cb.checked = on; });
+  },
+
+  dupSelectedIds() {
+    return [...document.querySelectorAll('#dupList input[name="dupPick"]:checked')]
+      .map(cb => parseInt(cb.value, 10)).filter(Number.isFinite);
+  },
+
+  // 删除后把当前组从结果里移除，页码留在原地（末组则前移）
+  _dupDropCurrent() {
+    const gs = this.state._dupGroups || [];
+    gs.splice(this.state._dupPage || 0, 1);
+    if ((this.state._dupPage || 0) >= gs.length) this.state._dupPage = Math.max(0, gs.length - 1);
+    this.dupRender();
+  },
+
+  async dupDelete() {
+    const ids = this.dupSelectedIds();
+    if (!ids.length) return alert("请先勾选要删除的重复索引（不勾选的完全不受影响）");
+    if (!confirm(`确认删除本组已勾选的 ${ids.length} 条索引？\n\n只删除索引与关联数据（标签 / 观看状态 / 评分 / 封面候选），\n磁盘上的视频文件不会被删除；误删可重新扫描对应文件夹恢复。`)) return;
+    try {
+      const r = await this.api("/api/admin/media/bulk", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", ids }),
+      });
+      this.mgMsg(`已删除 ${r.deleted} 条重复索引（磁盘文件未改动）`);
+      await this.loadCategories();
+      this._dupDropCurrent();
+      this.manageSearch();      // 作品列表同步刷新
+    } catch (e) { this.mgMsg("删除失败：" + e.message, true); }
+  },
+
+  // 删除本组勾选的作品：**索引 + 磁盘真实文件**（二次确认，不可恢复）
+  async dupDeleteFiles() {
+    const ids = this.dupSelectedIds();
+    if (!ids.length) return alert("请先勾选要删除的作品（不勾选的完全不受影响）");
+    const g = (this.state._dupGroups || [])[(this.state._dupPage || 0)];
+    const names = g ? g.items.filter(it => ids.includes(it.id)).map(it => `#${it.id} ${it.title || ""}`) : [];
+    // ① 第一次确认：列出将删除的作品
+    if (!confirm(`【第一次确认】将从磁盘永久删除以下 ${ids.length} 部作品（索引 + 视频文件）：\n\n` +
+      names.join("\n") + `\n\n此操作不可恢复，确定继续？`)) return;
+    // ② 第二次确认：明确后果
+    if (!confirm("【第二次确认】视频文件将从磁盘永久删除，无法从回收站恢复！\n\n" +
+      "确认要继续吗？（点「取消」则不做任何操作）")) return;
+    try {
+      const r = await this.api("/api/admin/media/delete-files", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      this.mgMsg(`已删除 ${r.deleted} 部作品（含文件 ${r.files_deleted} 个；文件原本缺失 ${r.missing} 个）` +
+        (r.leftovers && r.leftovers.length ? `；保留的素材文件 ${r.leftovers.length} 个` : ""));
+      await this.loadCategories();
+      this._dupDropCurrent();
+      this.manageSearch();
+    } catch (e) { this.mgMsg("删除失败：" + e.message, true); }
+  },
+
+  async dupIgnore() {
+    const gs = this.state._dupGroups || [];
+    const g = gs[this.state._dupPage || 0];
+    if (!g) return;
+    if (!confirm("确认忽略这一组？\n之后「检测相似作品」将不再列出这组（记录的是组内标题，删除或改名后会自然失效）。")) return;
+    try {
+      const r = await this.api("/api/admin/media/duplicates/ignore", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: g.key }),
+      });
+      this.state._dupIgnored = (this.state._dupIgnored || 0) + 1;
+      this.mgMsg(`已忽略该组（累计忽略记录 ${r.ignored} 条）`);
+      this._dupDropCurrent();
+    } catch (e) { this.mgMsg("忽略失败：" + e.message, true); }
   },
 
   // ---- 作品管理：批量打标签（复用标签气泡，多选）----
@@ -954,6 +1231,29 @@ const app = {
     alert("已保存");
     this.adminLoad(mid);
   },
+  // 作品编辑 · 删除作品：索引 + 磁盘文件（二次确认，不可恢复）
+  async adminDeleteWork() {
+    const mid = parseInt(document.getElementById("aId").value, 10);
+    if (!mid) return alert("请先在上方查找并选择一部作品");
+    const title = (document.getElementById("aTitle").value || "").trim();
+    if (!confirm(`【第一次确认】将删除作品 #${mid} ${title}\n` +
+      "包括：索引与关联数据 + 磁盘上的视频文件（不可恢复）。\n确定继续？")) return;
+    if (!confirm("【第二次确认】视频文件将从磁盘永久删除，无法从回收站恢复！\n" +
+      "确认要继续吗？（点「取消」则不做任何操作）")) return;
+    try {
+      const r = await this.api("/api/admin/media/delete-files", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [mid] }),
+      });
+      alert(`已删除作品 #${mid}（含文件 ${r.files_deleted} 个）` +
+        (r.leftovers && r.leftovers.length ? `\n保留的素材文件 ${r.leftovers.length} 个（详见返回）` : ""));
+      // 清空编辑表单与选择列表
+      document.getElementById("aForm").style.display = "none";
+      document.getElementById("aId").value = "";
+      document.getElementById("aPick").value = "";
+      document.getElementById("aPickInfo").textContent = "作品已删除；可重新查询选择其它作品";
+    } catch (e) { alert("删除失败：" + e.message); }
+  },
   async metaRefresh() {
     const mid = document.getElementById("aId").value;
     if (!mid) return alert("请先查找并选择一部作品");
@@ -987,7 +1287,9 @@ const app = {
     this.adminLoad(mid);
   },
   async adminRestart() {
-    const text = document.getElementById("rConfirm").value;
+    const input = document.getElementById("rConfirm");
+    const btn = document.querySelector("#ap-restart .modal-actions .btn.danger");
+    const text = (input.value || "").trim();          // 容错：误带首尾空格也能通过
     if (text !== "__RESTART__") { document.getElementById("rMsg").textContent = "确认文本不正确，未执行"; return; }
     if (!confirm("再次确认：确定要一键重启服务吗？")) return;
     const tk = await this.api("/api/admin/restart-token");
@@ -995,7 +1297,33 @@ const app = {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm_text: text, token: tk.token }),
     });
-    document.getElementById("rMsg").textContent = "已提交，服务即将重启（约数秒）。";
+    document.getElementById("rMsg").textContent = "已提交，服务重启中…恢复后会自动刷新本页。";
+    if (btn) btn.disabled = true;
+    this.waitRestartBack();
+  },
+
+  // 重启期间轮询服务是否恢复（旧进程约 1s 后退出，新进程再花数秒绑定端口），恢复即自动刷新
+  waitRestartBack(tries, okStreak) {
+    tries = tries || 0;
+    okStreak = okStreak || 0;
+    const MAX_TRIES = 60;                             // 最多等 60 次 ≈ 1 分钟
+    setTimeout(() => {
+      if (tries + 1 >= MAX_TRIES) {                   // 超时：给出人工提示并解锁按钮
+        document.getElementById("rMsg").textContent = "服务长时间未恢复，请手动刷新页面查看。";
+        const btn = document.querySelector("#ap-restart .modal-actions .btn.danger");
+        if (btn) btn.disabled = false;
+        return;
+      }
+      fetch("/api/me", { cache: "no-store" }).then(r => {
+        if (r.ok) {
+          // 连续 2 次探测成功才刷新：避免在旧进程退出前的最后一刻误判为已恢复
+          if (okStreak + 1 >= 2) { location.reload(); return; }
+          this.waitRestartBack(tries + 1, okStreak + 1);
+          return;
+        }
+        this.waitRestartBack(tries + 1, 0);
+      }).catch(() => this.waitRestartBack(tries + 1, 0));
+    }, tries === 0 ? 3000 : 1000);                    // 首次先等 3s，避开旧进程收尾窗口
   },
 
   // ---- 管理中心（用户 / 用户组，占位）----
@@ -1011,14 +1339,161 @@ const app = {
     document.getElementById("mp-groups").style.display = tab === "groups" ? "block" : "none";
     if (tab === "users") this.loadUsers();
   },
+  // ---- 管理中心 · 账号管理（增删改查）----
+  userMsg(text, isWarn) {
+    const el = document.getElementById("userMsg");
+    if (el) { el.textContent = text; el.style.color = isWarn ? "var(--warn)" : ""; }
+  },
   async loadUsers() {
-    const tbody = document.querySelector("#userList tbody");
-    tbody.innerHTML = '<tr><td colspan="4" class="muted">加载中…</td></tr>';
-    const d = await this.api("/api/admin/users").catch(() => ({ items: [] }));
+    const box = document.getElementById("userAdminList");
+    if (!box) return;
+    box.innerHTML = '<div class="muted">加载中…</div>';
+    const d = await this.api("/api/admin/users").catch(() => ({ items: [], default_user_id: 1 }));
     const items = d.items || [];
-    tbody.innerHTML = items.map(u =>
-      `<tr><td>${u.id}</td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${esc(u.created_at || "")}</td></tr>`).join("")
-      || '<tr><td colspan="4" class="muted">暂无用户</td></tr>';
+    box.innerHTML = `<table class="user-table"><thead><tr>
+        <th>ID</th><th>账号名</th><th>角色</th><th>等级</th><th>成长值</th><th>签到</th><th>创建时间</th><th>操作</th>
+      </tr></thead><tbody>` + (items.map(u => `
+      <tr>
+        <td>${u.id}${u.is_default ? ' <span class="dup-keep-tag">默认</span>' : ""}</td>
+        <td><input class="user-edit-name" data-id="${u.id}" value="${esc(u.name || "")}" maxlength="40"></td>
+        <td>
+          <select class="user-edit-role" data-id="${u.id}" ${u.is_default ? "disabled title=\"默认登录账号不可降级\"" : ""}>
+            <option value="user" ${u.role !== "admin" ? "selected" : ""}>普通用户</option>
+            <option value="admin" ${u.role === "admin" ? "selected" : ""}>管理员</option>
+          </select>
+        </td>
+        <td>Lv.${u.level ?? 1}</td>
+        <td>${u.points ?? 0}</td>
+        <td>${u.checkin_days ?? 0} 天</td>
+        <td>${esc((u.created_at || "").slice(0, 10))}</td>
+        <td class="tag-admin-ops">
+          <button class="btn" onclick="app.saveUser(${u.id})">保存</button>
+          <button class="btn danger" onclick="app.deleteUser(${u.id}, '${esc(u.name || "")}')" ${u.is_default ? "disabled title=\"默认登录账号不可删除\"" : ""}>删除</button>
+        </td>
+      </tr>`).join("") || '<tr><td colspan="8" class="muted">暂无账号</td></tr>') + `</tbody></table>`;
+  },
+  async createUser() {
+    const nameEl = document.getElementById("userNewName");
+    const roleEl = document.getElementById("userNewRole");
+    const name = (nameEl.value || "").trim();
+    if (!name) { this.userMsg("请输入账号名", true); return; }
+    try {
+      const r = await this.api("/api/admin/users", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, role: roleEl.value }),
+      });
+      this.userMsg(`已创建账号「${r.user.name}」（${r.user.role === "admin" ? "管理员" : "普通用户"}）`);
+      nameEl.value = "";
+      this.loadUsers();
+    } catch (e) { this.userMsg("创建失败：" + e.message, true); }
+  },
+  async saveUser(uid) {
+    const name = document.querySelector(`.user-edit-name[data-id="${uid}"]`).value.trim();
+    const role = document.querySelector(`.user-edit-role[data-id="${uid}"]`).value;
+    try {
+      await this.api(`/api/admin/users/${uid}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, role }),
+      });
+      this.userMsg("已保存");
+      this.loadUsers();
+    } catch (e) { this.userMsg("保存失败：" + e.message, true); }
+  },
+  async deleteUser(uid, name) {
+    if (!confirm(`确认删除账号「${name}」？\n将同时清掉该账号的观看状态 / 评分 / 收藏 / 备注（不影响作品与标签）。`)) return;
+    try {
+      await this.api(`/api/admin/users/${uid}`, { method: "DELETE" });
+      this.userMsg(`已删除账号「${name}」`);
+      this.loadUsers();
+    } catch (e) { this.userMsg("删除失败：" + e.message, true); }
+  },
+
+  // ---- 个人中心（账号 / 每日签到 / 收藏夹 / 等级权益预留）----
+  meTab(tab) {
+    document.querySelectorAll("#meModal .admin-tabs .tab").forEach(t =>
+      t.classList.toggle("on", t.dataset.tab === tab));
+    ["profile", "fav", "perks"].forEach(p =>
+      document.getElementById("me-" + p).style.display = p === tab ? "block" : "none");
+    if (tab === "profile") this.loadMe();
+    if (tab === "fav") this.loadFavs();
+    if (tab === "perks") this.renderPerks();
+  },
+  openMe() {
+    document.getElementById("meModal").style.display = "flex";
+    this.meTab("profile");
+  },
+  closeMe() { document.getElementById("meModal").style.display = "none"; },
+
+  async loadMe() {
+    const box = document.getElementById("meCard");
+    let me;
+    try { me = await this.api("/api/me"); }
+    catch (e) { box.innerHTML = `<div class="warn">加载失败：${esc(e.message)}</div>`; return; }
+    this.state._me = me;
+    const maxed = (me.level || 1) >= (me.max_level || 30);
+    const pct = maxed ? 100 : Math.round((me.points || 0) % 100);   // 每级 100 成长值
+    box.innerHTML = `
+      <div class="me-card">
+        <div class="me-head">
+          <div class="me-name">${esc(me.name || "-")}
+            <span class="muted">${me.role === "admin" ? "管理员" : "普通用户"} · Lv.${me.level}</span></div>
+          <button class="btn ${me.checked_in_today ? "" : "primary"}" id="checkinBtn" onclick="app.doCheckin()"
+                  ${me.checked_in_today ? "disabled" : ""} title="每天一次；连续每满 7 天额外 +20 成长值">
+            ${me.checked_in_today ? "今日已签到" : "每日签到"}</button>
+        </div>
+        <div class="me-bar"><i style="width:${pct}%"></i></div>
+        <div class="me-stats">
+          <span>成长值 <b>${me.points ?? 0}</b></span>
+          <span>${maxed ? "已达最高等级" : `距下一级还需 <b>${me.next_level_need}</b>`}</span>
+          <span>累计签到 <b>${me.checkin_days}</b> 天</span>
+          <span>连续签到 <b>${me.checkin_streak}</b> 天</span>
+        </div>
+      </div>`;
+  },
+
+  async doCheckin() {
+    const btn = document.getElementById("checkinBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "签到中…"; }
+    let r;
+    try { r = await this.api("/api/me/checkin", { method: "POST" }); }
+    catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = "每日签到"; }
+      alert("签到失败：" + e.message); return;
+    }
+    if (!r.ok) { this.loadMe(); return; }
+    this.loadMe();
+  },
+
+  async loadFavs() {
+    const grid = document.getElementById("favGrid");
+    const info = document.getElementById("favInfo");
+    let d;
+    try { d = await this.api("/api/me/favorites"); }
+    catch (e) { grid.innerHTML = `<div class="warn">加载失败：${esc(e.message)}</div>`; return; }
+    const items = d.items || [];
+    info.textContent = items.length
+      ? `共收藏 ${items.length} 部（点击卡片打开详情）`
+      : "还没有收藏：在作品详情抽屉或播放页点「收藏」即可加入";
+    grid.innerHTML = items.map(it => `
+      <a class="fav-card" onclick="app.openDetail(${it.id})">
+        <img loading="lazy" decoding="async" src="/api/poster/${it.id}" alt="${esc(it.title || "")}"
+             onerror="this.classList.add('broken')">
+        <span class="fav-name">${esc(it.title || ("#" + it.id))}</span>
+        <span class="fav-meta">${esc(String(it.year ?? ""))}${it.rating_display != null ? " · ★" + Number(it.rating_display).toFixed(1) : ""}</span>
+      </a>`).join("") || '<div class="empty">暂无收藏</div>';
+  },
+
+  renderPerks() {
+    const me = this.state._me || {};
+    const perks = me.perks || [];
+    const box = document.getElementById("perkList");
+    const lv = me.level || 1;
+    box.innerHTML = perks.length
+      ? `<table class="user-table"><thead><tr><th>功能</th><th>所需等级</th><th>状态</th></tr></thead><tbody>` +
+        perks.map(p => `<tr><td>${esc(p.feature)}</td><td>Lv.${p.level}</td><td>` +
+          (lv >= p.level ? '<span class="staged-add">已开放</span>' : '<span class="staged-upd">未开放</span>') +
+          `</td></tr>`).join("") + `</tbody></table>`
+      : '<div class="empty">暂未启用任何等级限制功能（预留位：后续在 services/levels.py 的 FEATURE_LEVELS 里声明即可生效）</div>';
   },
 
   // ---- 扫描（指定路径直接扫 / 留空全盘需防误操作确认）----
@@ -1074,26 +1549,104 @@ const app = {
   async refreshScanStatus() {
     let s;
     try { s = await this.api("/api/admin/scan/status"); } catch { return; }
-    const el = document.getElementById("barFill");
-    if (!s.running && s.kind == null) { el.style.width = "0%"; el.style.animation = "none"; return; }
+    if (s.running) this._stagedAuto = false;               // 任务进行中 → 结束后再自动刷新清单
+    if (!s.running && s.kind == null) { document.getElementById("barFill").style.width = "0%"; document.getElementById("barFill").style.animation = "none"; return; }
     const pct = s.total ? (s.done / s.total * 100).toFixed(0) + "%" : (s.running ? "45%" : "100%");
+    const el = document.getElementById("barFill");
     el.style.width = pct;
     el.style.animation = s.running ? "pulse 1.2s infinite" : "none";
+    const phase = (s.meta || {}).phase === "import" ? "导入" : "扫描";
     const txt = document.getElementById("scanProgressText");
     if (s.running) {
-      txt.textContent = `正在扫描… ${s.done}/${s.total}（当前：${esc(s.current || "-")}）`;
+      txt.textContent = `正在${phase}… ${s.done}/${s.total}（当前：${esc(s.current || "-")}）`;
       return;
     }
     if (s.result) {
       const r = s.result;
       const pend = (r.rating_pending || []).map(p => `· ${esc(p.title)} → ${p.score}`).join("\n");
-      document.getElementById("scanResult").textContent =
-        `扫描 ${r.scanned} · 新增 ${r.added} · 更新 ${r.updated} · 移除 ${r.removed}` +
-        (r.canceled ? "\n（已取消）" : "") +
-        (r.error ? "\n错误：" + r.error : "") +
-        (pend ? "\n\n待人工匹配 " + r.rating_pending.length + " 条评分：\n" + pend : "\n评分已全部回填");
-      txt.textContent = r.canceled ? "已取消" : "完成";
+      if ((s.meta || {}).phase === "import") {
+        document.getElementById("scanResult").textContent =
+          `导入 ${r.total} 条 · 新增 ${r.added} · 更新 ${r.updated} · 跳过 ${r.skipped}` +
+          (r.canceled ? "\n（已取消，清单保留）" : "\n（清单已清空）") +
+          `\n评分回填命中 ${r.rating_hits ?? 0}，待人工匹配 ${(r.rating_pending || []).length}` +
+          (pend ? "\n" + pend : "");
+        txt.textContent = r.canceled ? "导入已取消" : "导入完成";
+      } else {
+        document.getElementById("scanResult").textContent =
+          `扫描 ${r.scanned} · 待导入清单 ${r.staged ?? (r.added + r.updated)} 条（新增 ${r.added} / 更新 ${r.updated}）` +
+          (r.canceled ? "\n（已取消）" : "") +
+          (r.error ? "\n错误：" + r.error : "") +
+          "\n请到下方「待导入清单」确认后点「导入到索引」" +
+          (pend ? "\n\n待人工匹配 " + r.rating_pending.length + " 条评分：\n" + pend : "");
+        txt.textContent = r.canceled ? "已取消" : "扫描完成（未入库）";
+      }
+      // 扫描/导入结束 → 自动刷新一次待导入清单（每个任务只刷一次）
+      if (!this._stagedAuto) { this._stagedAuto = true; this.loadStagedScan(); }
     } else { txt.textContent = "待机"; }
+  },
+
+  // ---- 待导入清单（扫描 → 人工确认 → 导入）----
+  async loadStagedScan() {
+    const box = document.getElementById("stagedList");
+    const info = document.getElementById("stagedInfo");
+    if (!box) return;
+    let d;
+    try { d = await this.api("/api/admin/scan/staged?limit=300"); }
+    catch (e) { box.innerHTML = `<div class="warn">加载失败：${esc(e.message)}</div>`; return; }
+    const items = d.items || [];
+    info.textContent = d.total
+      ? `待导入 ${d.total} 条（新增 ${d.added} / 更新 ${d.updated}）` +
+        (d.total > items.length ? ` · 仅显示前 ${items.length} 条` : "")
+      : "暂无待导入条目（扫描后这里会出现候选）";
+    if (!items.length) { box.innerHTML = '<div class="empty">暂无待导入条目</div>'; return; }
+    box.innerHTML = `<table class="user-table staged-table"><thead><tr>
+        <th>类型</th><th>分类</th><th>作品名称</th><th>年份</th><th>封面</th><th>文件</th>
+      </tr></thead><tbody>` + items.map(it => `
+        <tr>
+          <td>${it.action === "add"
+            ? '<span class="staged-add">新增</span>'
+            : '<span class="staged-upd">更新</span>'}</td>
+          <td>${esc(it.category || "")}</td>
+          <td class="mg-title">${esc(it.title || "")}</td>
+          <td>${esc(String(it.year ?? ""))}</td>
+          <td>${it.has_poster ? "有" : "—"}</td>
+          <td class="staged-path" title="${esc(it.file_path || "")}">${esc(it.file_path || "")}</td>
+        </tr>`).join("") + `</tbody></table>`;
+  },
+
+  async importStagedScan() {
+    const sel = document.getElementById("scanCategory");
+    const cat = ((sel && sel.value) || "").trim();
+    // 防呆：导入必须明确选择分类，「自动（按目录名）」一律拒绝
+    if (!cat) {
+      alert("防呆检查未通过：请先在上方「分类」下拉里选择一个具体分类。\n（不能选「自动（按目录名）」——导入到哪个分类必须由人工明确指定）");
+      if (sel) { sel.style.borderColor = "var(--warn)"; sel.focus(); }
+      setTimeout(() => { if (sel) sel.style.borderColor = ""; }, 2500);
+      return;
+    }
+    let d;
+    try { d = await this.api("/api/admin/scan/staged?limit=1"); }
+    catch (e) { alert("读取待导入清单失败：" + e.message); return; }
+    if (!d.total) { alert("暂无待导入清单，请先执行扫描"); return; }
+    if (!confirm(`确认把待导入清单写入索引？\n分类：${cat}\n共 ${d.total} 条（新增 ${d.added} / 更新 ${d.updated}）\n\n导入前会逐条校验文件仍在且未变化；导入成功后清单将清空。`)) return;
+    try {
+      const r = await this.api("/api/admin/scan/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: cat }),
+      });
+      if (!r.started) { alert("未启动：" + r.reason); return; }
+      this.pollJob(["scan"]);       // 导入也走 scan 任务通道，进度显示在同一进度条
+    } catch (e) { alert("导入失败：" + e.message); }
+  },
+
+  async clearStagedScan() {
+    if (!confirm("确认放弃当前待导入清单？（不写库，仅清空暂存）")) return;
+    try {
+      const r = await this.api("/api/admin/scan/staged/clear", { method: "POST" });
+      const el = document.getElementById("scanProgressText");
+      if (el) el.textContent = `已放弃 ${r.cleared} 条待导入条目`;
+    } catch (e) { alert("操作失败：" + e.message); }
+    this.loadStagedScan();
   },
 
   // ---- 联网补全（合并：可选上传索引ID 限定范围 / 全量缺失补全）----
@@ -1160,11 +1713,11 @@ const app = {
         `目标 ${r.total} · 已补全 ${r.filled}` +
         (r.failed_reason ? `\n失败 ${r.failed}（示例：${esc(r.failed_reason)}）` : (r.failed ? `\n失败 ${r.failed}` : "")) +
         `\n未命中 ${r.skipped}` + miss +
-        (r.date_filled ? `\n补发布年月 ${r.date_filled}（其中年份 ${r.year_filled ?? 0}）` : "") +
+        (r.date_filled ? `\n补日期 ${r.date_filled}（其中年份 ${r.year_filled ?? 0}）` : "") +
         (r.tags_online ? `\n联网标签 ${r.tags_online}` : "") +
         (r.tags_local ? `\n简评打标 ${r.tags_local}` : "") +
         (r.canceled ? "\n（已取消）" : "") +
-        `\n来源缀联：本地 → 百度 → sample（tag 按题材过滤，≤10）`;
+        `\n来源缀联：本地 → 百度 → media-db（tag 按题材过滤，≤10）`;
     } else { txt.textContent = "待机"; }
   },
 
@@ -1216,42 +1769,21 @@ const app = {
       document.getElementById("coverResult").textContent = "指定目录补全失败：" + e.message;
     }
   },
-  // ④ 截图视频封面：用视频预览帧当封面（不生成、不存储任何图片文件）
-  async startVideoFrameCover() {
-    const ids = this.state._ids || [];
-    if (!confirm("把「视频预览帧」作为封面（不存储任何图片文件）？\n\n" +
-      (ids.length ? `将只处理已解析的 ${ids.length} 个索引ID。` : "当前未解析索引ID，将对全部缺封面作品生效。"))) return;
-    const st = document.getElementById("coverStatus");
-    try {
-      const r = await this.api("/api/admin/cover-video-frame", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "set", ids }),
-      });
-      st.textContent = "完成";
-      document.getElementById("coverResult").textContent =
-        `已标记 ${r.marked} 部作品用「视频预览帧」当封面（未存储任何图片文件）\n` +
-        `跳过：已有本地封面 ${r.skipped_has_cover} · 人工封面保护 ${r.skipped_edited}`;
-    } catch (e) { st.textContent = "失败"; document.getElementById("coverResult").textContent = "失败：" + e.message; }
-  },
-  async clearVideoFrameCover() {
-    if (!confirm("取消「用视频预览帧当封面」标记？（不影响已存在的实体封面文件）")) return;
-    const ids = this.state._ids || [];
-    try {
-      const r = await this.api("/api/admin/cover-video-frame", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "clear", ids }),
-      });
-      document.getElementById("coverStatus").textContent = "完成";
-      document.getElementById("coverResult").textContent = `已取消标记 ${r.cleared} 部`;
-    } catch (e) { document.getElementById("coverResult").textContent = "失败：" + e.message; }
-  },
-  // ⑤ 服务端抽帧：用 ffmpeg 把 cover_mode=video_frame 的作品抽帧落盘小图，写 poster_path，
-  // 前端改走普通图片加载（首屏更快）。
+  // ④ 服务端抽帧：用 ffmpeg 给缺封面的作品抽帧落盘小图，写 poster_path，前端改走普通图片加载。
+  // 范围 = A 区解析出的索引ID（与「联网搜索封面」同一来源）；未解析时给出步骤提示并阻止启动。
   async startFrameBackfill() {
     const ids = this.state._ids || [];
-    if (!confirm("用 ffmpeg 服务端预抽帧，把「视频预览帧封面」落盘为小图？\n\n" +
-      (ids.length ? `将只处理已解析的 ${ids.length} 个索引ID。` : "未解析索引ID，将处理全部符合条件的作品。") +
-      "\n抽帧后前端改走普通图片加载，首屏更快。")) return;
+    if (!ids.length) {
+      alert("「服务端抽帧」需要先在 A 区解析出索引ID（待处理范围），步骤：\n\n" +
+        "① 切到「作品编辑」标签页 → 点「下载索引ID.txt」；\n" +
+        "② 回到 A 区选择该文件并点「解析ID」；\n" +
+        "③ 看到「已解析 N 个索引ID」后，再回来点「④ 服务端抽帧」。\n\n" +
+        "只处理解析范围内、当前没有封面的作品。");
+      return;
+    }
+    if (!confirm(`用 ffmpeg 给缺封面的作品抽帧，落盘为小图并写回封面？\n\n` +
+      `范围：已解析的 ${ids.length} 个索引ID（只处理其中当前没有封面的作品）。\n` +
+      `抽帧后前端改走普通图片加载，首屏更快。`)) return;
     const st = document.getElementById("coverStatus");
     try {
       const res = await this.api("/api/admin/cover-frame", {
@@ -1259,7 +1791,7 @@ const app = {
         body: JSON.stringify({ ids }),
       });
       if (!res.started) { st.textContent = "未启动：" + res.reason; return; }
-      st.textContent = "已提交服务端抽帧任务…";
+      st.textContent = `已提交服务端抽帧任务（范围 ${ids.length} 个索引ID）…`;
       this.pollJob(["frame"]);
     } catch (e) { st.textContent = "失败"; document.getElementById("coverResult").textContent = "失败：" + e.message; }
   },
@@ -1560,11 +2092,19 @@ const app = {
     this._jobTimer = setInterval(tick, 1500);
   },
 
-  metaLoad() {
+  async metaLoad() {
     // 标签气泡脱离 .sticky-top 的层叠上下文，挂到 body 下：确保渲染在最顶层
     const tp = document.getElementById("fTagPanel");
     if (tp && tp.parentElement !== document.body) document.body.appendChild(tp);
-    this.api("/api/stats").then(d => {
+    // 当前账号角色：非 admin 隐藏「白屏管理」入口（标签删除按钮在渲染时再判断一次）
+    this.api("/api/me").then(me => {
+      this.state._me = me || {};
+      const btn = document.getElementById("adminEntry");
+      if (btn && !this.isAdmin()) btn.style.display = "none";
+    }).catch(() => { this.state._me = {}; });
+    // 先取统计 → 填充下拉 → 恢复上次筛选 → 再发首次查询（保证首屏就是恢复后的筛选结果）
+    try {
+      const d = await this.api("/api/stats");
       this.state.categories = d.categories.map(c => c.category);
       const years = d.years.map(y => y.year).filter(Boolean).sort();
       fillOptions("fCat", this.state.categories);
@@ -1573,13 +2113,16 @@ const app = {
       fillOptions("fMonth", months);
       // 标签筛选气泡：分栏展示（6~8 栏，每栏最多 12 行）+ 已选标签栏位
       this.renderTagCols(d.tags || []);
+      // 恢复上次筛选（sessionStorage）：需在选项填充后执行，否则下拉值匹配不上
+      this.restoreFilters();
       this.renderSelectedTags();
+      this.syncTagChecks();
       // 补充字典中暂无关联的标签（保证气泡在无关联数据时也非空）
       this.api("/api/tags").then(t => { this.renderTagCols(t.items || []); this.syncTagChecks(); })
         .catch(() => {});
       const fav = document.getElementById("statChip");
-      fav.textContent = `${d.total} 部 · 平均 ${d.rating_avg ?? "-"}`;
-    });
+      if (fav) fav.textContent = `${d.total} 部 · 平均 ${d.rating_avg ?? "-"}`;
+    } catch (e) { /* 首屏统计失败不阻塞列表加载 */ }
     this.load();
     this.startNotifLoop();
     // 点击气泡外关闭（消息气泡 / 标签气泡）
@@ -1601,8 +2144,22 @@ const app = {
     if (!this._io && "IntersectionObserver" in window) {
       this._io = new IntersectionObserver(entries => {
         if (entries[0].isIntersecting) this.nextPage();
-      }, { rootMargin: "400px" });
+      }, { rootMargin: "600px" });
       this._io.observe(document.getElementById("loadMore"));
+    }
+    // 滚轮 / 滚动条 / 窗口变化：距底部不足 600px 就追加下一页（节流 150ms）
+    if (!this._scrollBound) {
+      this._scrollBound = true;
+      let last = 0;
+      const probe = () => {
+        const now = Date.now();
+        if (now - last < 150) return;
+        last = now;
+        this.checkLoadMore();
+      };
+      window.addEventListener("scroll", probe, { passive: true });
+      window.addEventListener("wheel", (e) => { if (e.deltaY > 0) probe(); }, { passive: true });
+      window.addEventListener("resize", probe, { passive: true });
     }
   },
 };
@@ -1619,12 +2176,19 @@ function fillOptions(id, values) {
 
 function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
+// 标签 chips：仅 admin 渲染删除按钮（普通账号只增不删；后端删除接口同样要求 admin）
+function tagChipsHTML(mid, tags) {
+  if (!tags || !tags.length) return '<i>无</i>';
+  const canDel = app.isAdmin();
+  return tags.map(t => `<span class="tag-chip">${esc(t)}${canDel
+    ? `<button class="tag-x" data-name="${esc(t)}" onclick="app.removeTag(${mid}, this.dataset.name)">×</button>`
+    : ""}</span>`).join(" ");
+}
+
 function renderTagList(mid, tags) {
   const box = document.getElementById("tagList");
   if (!box) return;
-  box.innerHTML = tags.length
-    ? tags.map(t => `<span class="tag-chip">${esc(t)}<button class="tag-x" data-name="${esc(t)}" onclick="app.removeTag(${mid}, this.dataset.name)">×</button></span>`).join(" ")
-    : '<i>无</i>';
+  box.innerHTML = tagChipsHTML(mid, tags);
 }
 
 function starStr(score) {
@@ -1633,25 +2197,39 @@ function starStr(score) {
   return "★".repeat(full) + (frac >= 0.5 ? "½" : "");
 }
 
+// 我的评分：10 颗星，点击第 N 颗 → 前 N 颗亮起，得分=N（整数，0~10 分制）
 function myStarsHTML(mid, val) {
-  const v = val == null ? 0 : val;
-  let html = "";
-  for (let i = 1; i <= 5; i++) {
-    let cls = "star big";
-    if (v >= i) cls += " full";
-    else if (v >= i - 0.5) cls += " half";
-    html += `<span class="${cls}" title="点击星星评分（左半=+0.5）">
-      <i class="zl" onclick="app.setRating(${mid}, ${i - 0.5})">★</i>
-      <i class="zr" onclick="app.setRating(${mid}, ${i})">★</i>
-    </span>`;
+  const v = Math.round(val == null ? 0 : val);
+  let html = `<span class="stars10" title="点击第 N 颗星 = 打 N 分；再点当前最高星可清除">`;
+  for (let i = 1; i <= 10; i++) {
+    html += `<i class="s10${v >= i ? " on" : ""}" data-v="${i}"
+                onclick="app.setRating(${mid}, ${i})" title="${i} 分">★</i>`;
   }
-  return html;
+  return html + `</span>`;
 }
 
+// 评分档位（0~10 分制）
+function ratingLevel(v) { return v >= 9 ? "hi" : v >= 7 ? "mid" : "lo"; }
+
 function ratingBadge(m) {
-  if (m.rating_norm == null) return `<span class="rbadge none">—</span>`;
-  const level = m.rating_norm >= 4.5 ? "hi" : m.rating_norm >= 4 ? "mid" : "lo";
-  return `<span class="rbadge ${level}" title="${esc(m.rating_raw || "")}">${m.rating_norm.toFixed(1)}</span>`;
+  const v = m.rating_display != null ? m.rating_display : m.rating_norm;
+  if (v == null) return `<span class="rbadge none">—</span>`;
+  const votes = m.rating_votes || 0;
+  const tip = votes ? `${votes} 人评分` : esc(m.rating_raw || "");
+  return `<span class="rbadge ${ratingLevel(v)}" title="${tip}">${Number(v).toFixed(1)}</span>`;
+}
+
+// 评分后同步刷新所有位置（主界面卡片角标 / 详情页大分数与人数）
+function applyRatingEverywhere(mid, display, votes) {
+  document.querySelectorAll(`.card[data-id="${mid}"] .rbadge`).forEach(el => {
+    if (display == null) { el.className = "rbadge none"; el.textContent = "—"; return; }
+    el.className = "rbadge " + ratingLevel(display);
+    el.textContent = Number(display).toFixed(1);
+  });
+  const big = document.getElementById("detailRatingBig");
+  if (big) big.textContent = display == null ? "—" : Number(display).toFixed(1);
+  const voteEl = document.getElementById("detailRatingVotes");
+  if (voteEl && votes != null) voteEl.textContent = votes ? `${votes} 人评分` : "暂无用户评分";
 }
 
 function yearMonth(m) {
@@ -2025,7 +2603,7 @@ function frameStats(d, w, h) {
 
 function cardHTML(m) {
   return `
-    <div class="card" onclick="app.openDetail(${m.id})">
+    <div class="card" data-id="${m.id}" onclick="app.openDetail(${m.id})">
       <div class="thumb">
         ${posterHTML(m, "", "onerror=\"this.parentElement.classList.add('noimg');this.remove()\"")}
         <div class="cap">
@@ -2039,8 +2617,14 @@ function cardHTML(m) {
     </div>`;
 }
 
+function clearLoadMoreHint() {
+  const el = document.getElementById("loadMore");
+  if (el) el.innerHTML = "";
+}
+
 function renderGrid(items) {
   const g = document.getElementById("grid");
+  clearLoadMoreHint();
   if (!items.length) { g.innerHTML = `<div class="empty">没有匹配的作品</div>`; return; }
   g.innerHTML = items.map(cardHTML).join("");
   initFrameCovers(g);   // 视频帧封面：渲染后按需截取预览帧（仅内存，不落盘）
@@ -2059,6 +2643,8 @@ function drawerHTML(m, guard) {
   const res = (String(brackets).match(/\b\d{3,4}p\b/i) || [null])[0];
   const vtype = `${String(m.file_ext || "").toUpperCase()}${res ? " · " + res.toUpperCase() : ""}` || "-";
   const tags = m.tags || [];
+  const disp = m.rating_display != null ? m.rating_display : m.rating_norm;
+  const votes = m.rating_votes || 0;
   return `
     <div class="drawer-head">
       <button class="btn ghost x" onclick="app.closeDetail()">✕</button>
@@ -2066,11 +2652,14 @@ function drawerHTML(m, guard) {
     <div class="drawer-body">
       ${posterHTML(m, "poster", "onerror=\"this.style.display='none'\"")}
       <div class="info-box">
-        <div class="info-row"><span class="k">评分</span><span class="v">${m.rating_norm != null ? `<b class="rating-big">${m.rating_norm.toFixed(1)}</b>` : "暂无"}</span></div>
+        <div class="info-row"><span class="k">评分</span><span class="v">
+          <b class="rating-big" id="detailRatingBig">${disp != null ? Number(disp).toFixed(1) : "—"}</b>
+          <span class="muted" id="detailRatingVotes" style="margin-left:8px">${votes ? votes + " 人评分" : "暂无用户评分"}</span>
+        </span></div>
         <div class="info-row"><span class="k">名称</span><span class="v">${esc(m.title)}${m.title_jp && m.title_jp !== m.title ? `<div class="jp">${esc(m.title_jp)}</div>` : ""}</span></div>
         <div class="info-row"><span class="k">年月</span><span class="v">${esc(yearMonth(m) || "-")}</span></div>
-        <div class="info-row"><span class="k">制作组</span><span class="v">${esc(m.studio || "-")}</span></div>
-        <div class="info-row"><span class="k">标签</span><span class="v" id="tagList">${tags.length ? tags.map(t => `<span class="tag-chip">${esc(t)}<button class="tag-x" data-name="${esc(t)}" onclick="app.removeTag(${m.id}, this.dataset.name)">×</button></span>`).join(" ") : '<i>无</i>'}</span></div>
+        <div class="info-row"><span class="k">来源组</span><span class="v">${esc(m.studio || "-")}</span></div>
+        <div class="info-row"><span class="k">标签</span><span class="v" id="tagList">${tagChipsHTML(m.id, tags)}</span></div>
         <div class="info-row"><span class="k">视频类型</span><span class="v">${esc(vtype)}</span></div>
         <div class="info-row"><span class="k">索引ID</span><span class="v">#${m.id}</span></div>
         <div class="info-row"><span class="k">收藏</span><span class="v">${m.favorite_count ?? 0} 人</span></div>
@@ -2084,7 +2673,7 @@ function drawerHTML(m, guard) {
         <button class="btn" onclick="app.addTag(${m.id})">添加</button>
       </div>
       <div class="rates">
-        <span>我的评分：<b id="detailMyRating">${m.user.personal_rating != null ? m.user.personal_rating.toFixed(1) : "未评"}</b></span>
+        <span>我的评分：<b id="detailMyRating">${m.user.personal_rating != null ? m.user.personal_rating + " 星" : "未评"}</b></span>
         <span id="myStars">${myStarsHTML(m.id, m.user.personal_rating)}</span>
       </div>
       <div class="actions">
@@ -2097,11 +2686,35 @@ function drawerHTML(m, guard) {
         <select id="detailStatus" onchange="app.setState(${m.id}, {status:this.value})">
           ${["未看", "想看", "在看", "看完"].map(s => `<option ${st === s ? "selected" : ""}>${s}</option>`).join("")}
         </select>
-        <label>我的评分 <input type="number" min="0" max="5" step="0.5" id="pr" value="${m.user.personal_rating ?? ""}" onchange="app.setState(${m.id},{personal_rating:parseFloat(this.value)||null})"></label>
         <label class="fav"><input type="checkbox" id="fav" ${m.user.favorite ? "checked" : ""} onchange="app.setState(${m.id},{favorite:this.checked})"> 收藏</label>
         <textarea placeholder="备注…" onchange="app.setState(${m.id},{note:this.value})">${esc(m.user.note || "")}</textarea>
       </div>
       <div class="path">${esc(m.file_path)}</div>
     </div>`;
 }
+// ---------------- 全局 Enter 确认（弹窗二次确认键盘化） ----------------
+// 原生 confirm() 对话框本身已支持 Enter=确定（删除作品等二次确认无需额外处理）；
+// 这里把**自定义弹窗**的确认操作也接上 Enter：
+//   ① 全盘扫描确认条（勾选后 Enter = 确认全盘扫描）
+//   ② 一键重启（焦点在确认词输入框时 Enter = 提交重启）
+//   ③ 标签删除确认弹窗（Enter = 确认删除）
+// 焦点在带自身 Enter 处理的输入框（搜索/加标签等，标有 onkeydown）或文本域时不重复触发。
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Enter" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "TEXTAREA" || t.hasAttribute("onkeydown"))) return;
+  // ① 全盘扫描确认条
+  const fs = document.getElementById("fullScanConfirm");
+  if (fs && fs.style.display === "block") {
+    const btn = document.getElementById("fcBtn");
+    if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+    return;
+  }
+  // ② 一键重启确认词输入框
+  const rIn = document.getElementById("rConfirm");
+  if (rIn && document.activeElement === rIn) { e.preventDefault(); app.adminRestart(); return; }
+  // ③ 标签删除确认弹窗
+  const td = document.getElementById("tagDeleteModal");
+  if (td && td.style.display === "flex") { e.preventDefault(); app.tagDeleteConfirm(); return; }
+});
 document.addEventListener("DOMContentLoaded", () => app.metaLoad());

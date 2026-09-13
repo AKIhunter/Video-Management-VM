@@ -8,9 +8,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .authz import current_user
 from .db import get_db
-from .routers import admin, media, playback, userdata
+from .routers import account, admin, media, playback, userdata
 
 WEBUI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webui")
 log = logging.getLogger("vm.main")
@@ -29,17 +28,14 @@ async def lifespan(_app: FastAPI):
     finally:
         con.close()
     log.info("数据库初始化完成")
+    # 评分均值的空闲结算线程：仅在无长任务时批量重算（写入路径已即时重算，这里兜底）
+    from .services.ratings import start_settler
+    start_settler()
     yield
 
 
 app = FastAPI(title="视频管理器", version="0.1.0",
               description="轻量级视频索引与查询管理器", lifespan=lifespan)
-
-
-@app.get("/api/me")
-def me(user: dict = Depends(current_user)):
-    """当前登录人（v1 固定 admin）；前端据此决定是否展示白屏管理入口。"""
-    return user
 
 
 @app.get("/api/poster/{mid}")
@@ -55,6 +51,7 @@ def poster(mid: int, con=Depends(get_db)):
     raise HTTPException(404, "无海报")
 
 
+app.include_router(account.router)
 app.include_router(media.router)
 app.include_router(userdata.router)
 app.include_router(playback.router)

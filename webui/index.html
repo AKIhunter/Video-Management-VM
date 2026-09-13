@@ -11,7 +11,7 @@
 <header class="topbar">
   <div class="brand">视频管理器</div>
   <div class="search">
-    <input id="q" placeholder="搜索标题 / 制作组 / 索引id…" oninput="app.debounce()">
+    <input id="q" placeholder="搜索标题 / 来源组 / 索引id…" oninput="app.debounce()">
   </div>
   <button class="btn filter-toggle" id="filterToggle" onclick="app.toggleFilters()" title="展开 / 收缩筛选栏">筛选 ▾</button>
   <div class="top-actions">
@@ -26,7 +26,9 @@
         <div id="notifList" class="notif-list"></div>
       </div>
     </div>
-    <button class="btn" onclick="app.openAdmin()">白屏管理</button>
+    <button class="btn" onclick="app.openMe()">个人中心</button>
+    <button class="btn" id="adminEntry" onclick="app.openAdmin()">白屏管理</button>
+    <button class="btn" onclick="app.openManage()">管理中心</button>
   </div>
 </header>
 
@@ -36,35 +38,36 @@
     <option value="">全部状态</option><option>未看</option><option>想看</option><option>在看</option><option>看完</option>
   </select>
   <select id="fYear" onchange="app.onYearChange()"><option value="">全部年份</option></select>
-  <select id="fMonth" onchange="app.apply()"><option value="">全部月份</option></select>
   <div class="tagfilter" id="fTagWrap">
     <button class="btn" id="fTagBtn" onclick="app.toggleTagPanel(event)">标签筛选 ▾<span class="tagfilter-count" id="fTagCount">0</span></button>
     <div class="tag-panel" id="fTagPanel">
       <div class="tag-panel-head">
         <b id="fTagTitle">标签筛选</b>
-        <span class="muted" id="fTagHint">多选 · 满足任一标签即显示（OR）</span>
+        <span class="muted" id="fTagHint">即点即筛 · 满足任一标签即显示（OR）</span>
         <span class="tag-panel-ops">
           <button class="btn" onclick="app.clearTagFilter()">清空</button>
-          <button class="btn primary" onclick="app.applyTagPicker()">应用</button>
+          <button class="btn primary" id="fTagApplyBtn" onclick="app.applyTagPicker()">应用</button>
           <button class="btn ghost x" onclick="app.closeTagPanel()">✕</button>
         </span>
       </div>
       <div class="tag-cols" id="fTagCols"></div>
     </div>
   </div>
-  <div class="selected-tags" id="fTagSelected" title="已选标签（满足任一即显示）">
-    <span class="muted">未选择标签</span>
-  </div>
-  <label class="min">≥<select id="fMin" onchange="app.apply()">
-    <option value="">不限</option><option>4.5</option><option>4</option><option>3</option><option>2</option>
-  </select></label>
-  <label class="fav"><input type="checkbox" id="fFav" onchange="app.apply()"> 只看收藏</label>
-  <select id="fSort" onchange="app.apply()">
+  <select id="fSort" onchange="app.apply()" title="排序">
     <option value="score">按评分↓</option><option value="score_asc">按评分↑</option>
     <option value="date_desc">按日期↓</option><option value="date_asc">按日期↑</option>
     <option value="title">按标题 A→Z</option><option value="added">按入库↓</option>
     <option value="fav">收藏优先↓</option><option value="fav_asc">未收藏优先↑</option>
   </select>
+  <select id="fMonth" onchange="app.apply()"><option value="">全部月份</option></select>
+  <div class="selected-tags" id="fTagSelected" title="已选标签（满足任一即显示）">
+    <span class="muted">未选择标签</span>
+  </div>
+  <label class="min">≥<select id="fMin" onchange="app.apply()">
+    <option value="">不限</option><option>9</option><option>8</option><option>7</option>
+    <option>6</option><option>5</option><option>4</option><option>2</option>
+  </select></label>
+  <label class="fav"><input type="checkbox" id="fFav" onchange="app.apply()"> 只看收藏</label>
   <div class="pager">
     <button class="btn" onclick="app.nav(-1)">上一页</button>
     <span id="pageInfo"></span>
@@ -83,7 +86,6 @@
 
 <footer class="foot">
   <span>本地速率索引 · SQLite WAL · Range 流式播放</span>
-  <button class="btn ghost" onclick="app.openManage()">管理中心</button>
 </footer>
 
 <!-- 详情抽屉 -->
@@ -108,7 +110,7 @@
     <!-- 作品编辑：筛选 / 重置 / 下载 ID -->
     <div class="admin-pane" id="ap-edit">
       <div class="admin-search">
-        <input id="aQ" placeholder="关键词（标题 / 制作组 / 索引id）…">
+        <input id="aQ" placeholder="关键词（标题 / 来源组 / 索引id）…">
         <select id="aCategory" title="限定分类（与作品管理/首页筛选共用分类字典）">
           <option value="">全部分类</option>
         </select>
@@ -140,17 +142,17 @@
           <div class="field-row">
             <label class="field">索引ID <input id="aIdShow" disabled></label>
             <label class="field">年份 <input id="aYear" type="number"></label>
-            <label class="field">发布日期 <input id="aDate"></label>
+            <label class="field">日期 <input id="aDate"></label>
           </div>
           <label class="field full">标题 <input id="aTitle"></label>
           <label class="field full">日文原题 <input id="aTitleJp"></label>
-          <label class="field full">制作组 <input id="aStudio"></label>
+          <label class="field full">来源组 <input id="aStudio" title="扫描时自动生成：上级文件夹/本级文件夹（上级为数据盘根时仅记本级）"></label>
         </div>
 
         <div class="field-group">
           <h4 class="field-group-title">评分与字幕</h4>
           <div class="field-row">
-            <label class="field">评分 <input id="aRating" type="number" step="0.1" min="0" max="5"></label>
+            <label class="field">评分 <input id="aRating" type="number" step="0.1" min="0" max="10"></label>
             <label class="field">评分原文 <input id="aRatingRaw"></label>
             <label class="field inline">有中文字幕 <input id="aSub" type="checkbox"></label>
           </div>
@@ -173,6 +175,7 @@
 
         <div class="modal-actions">
           <button class="btn" type="button" onclick="app.metaRefresh()">本作品联网补全候选</button>
+          <button class="btn danger" type="button" onclick="app.adminDeleteWork()">删除作品（索引+文件）</button>
           <button class="btn primary" type="submit">保存</button>
         </div>
         <div id="candidate" class="candidate"></div>
@@ -182,9 +185,9 @@
     <!-- 联网补全（整合：全量 / 按ID / 封面 / 人工审定 / 打标） -->
     <div class="admin-pane" id="ap-complete" style="display:none">
       <div class="c-sec">
-        <h4>A · 全量联网补全（简介 / 发布年月 / 标签）</h4>
+        <h4>A · 全量联网补全（简介 / 日期 / 标签）</h4>
         <p class="muted">
-          【做什么】为缺少 发布时间年月 / 简介 / 标签 的作品联网补全（本地 → 百度 → sample 级联），
+          【做什么】为缺少 日期 / 简介 / 标签 的作品联网补全（本地 → 百度 → media-db 级联），
           并以本机简评为无标签作品 fallback 打标；人工编辑过的字段永不覆盖。<br>
           【范围】未上传索引ID = 补全所有缺失上述字段的作品；已上传 = 严格只补解析出的索引ID对应作品（含信息完整者，重点补标签）。<br>
           【不做什么】不补封面（用 B 区）、不修改人工已编辑字段、不删除任何数据。<br>
@@ -214,10 +217,10 @@
           未解析时会提示步骤并阻止启动，避免误扫全库、耗时过长；<br>
           ③ <b>指定目录补全</b>：人工填写一个本地目录，从该目录取图片与缺封面作品按标题匹配
           （只记录路径引用，不复制/移动任何文件）；<br>
-          ④ <b>截图视频封面（标记）</b>：把作品标记为「用视频预览帧当封面」，前端实时取帧显示；
-          若取到的帧接近全黑，会自动抽一帧更明亮的；<br>
-          ⑤ <b>服务端抽帧</b>：用 <b>ffmpeg</b> 把已标记的作品抽帧落盘为小图（写回封面），
-          之后前端改走普通图片加载 —— <b>首屏加载更快（30 张 &lt;500ms）</b>，推荐对 ④ 标记过的作品执行。
+          ④ <b>服务端抽帧</b>：用 <b>ffmpeg</b> 给缺封面的作品抽帧落盘为小图（写回封面），
+          之后前端改走普通图片加载 —— <b>首屏加载更快（30 张 &lt;500ms）</b>。
+          与 ② 相同，<b>必须先在 A 区解析出索引ID</b>，只处理解析范围内当前没有封面的作品。
+          （旧版「截图视频封面（标记）」已移除，由本功能替代。）
         </p>
         <div class="admin-search">
           <button class="btn primary" onclick="app.startCover()">① 本地匹配</button>
@@ -229,12 +232,8 @@
           <button class="btn" onclick="app.startCoverDir()">指定目录补全</button>
         </div>
         <div class="admin-search">
-          <button class="btn" onclick="app.startVideoFrameCover()">④ 截图视频封面（标记）</button>
-          <button class="btn" onclick="app.clearVideoFrameCover()">取消该标记</button>
-        </div>
-        <div class="admin-search">
-          <button class="btn primary" onclick="app.startFrameBackfill()">⑤ 服务端抽帧（ffmpeg 落盘小图）</button>
-          <span class="muted">仅对没有本地封面且已标记「视频预览帧」的作品生效。</span>
+          <button class="btn primary" onclick="app.startFrameBackfill()">④ 服务端抽帧（ffmpeg 落盘小图）</button>
+          <span class="muted">按 A 区已解析的索引ID 执行，只处理范围内当前没有封面的作品。</span>
         </div>
         <div class="bar" id="coverBar"><div id="coverFill"></div></div>
         <pre id="coverResult"></pre>
@@ -287,6 +286,35 @@
         <div class="muted" id="mgCatMsg">—</div>
       </div>
       <div class="c-sec">
+        <h4>重复作品检测（按分类）</h4>
+        <p class="muted">
+          选定分类后，按<b>标题相似度</b>自动把「看起来是同一部」的作品分到一组，人工确认后清理。<br>
+          【勾选逻辑】组头勾选框 = 本组<b>全选 / 全不选</b>；<b>不勾选的完全不受删除影响</b>，勾选了才会被删。<br>
+          【两种删除】「删除本组选中索引」只删索引与关联数据（标签 / 观看状态 / 评分 / 封面候选），磁盘文件不动；
+          「删除本组选中作品（含文件）」会把勾选作品的<b>视频文件一并从磁盘删除</b>（二次确认，不可恢复，谨慎使用）。<br>
+          【相似度】阈值越大越严格（默认 0.86）；归一化后标题完全相同的一定会被分到同一组。
+        </p>
+        <div class="admin-search">
+          <label class="field inline">分类
+            <select id="dupCategory" title="选择要检测的分类"><option value="">全部分类</option></select>
+          </label>
+          <label class="field inline">相似度阈值
+            <input id="dupThreshold" type="number" min="0.5" max="1" step="0.01" value="0.86" style="width:90px">
+          </label>
+          <button class="btn primary" onclick="app.dupScan()">检测相似作品</button>
+          <span class="muted" id="dupInfo">—</span>
+        </div>
+        <div class="admin-search">
+          <button class="btn" onclick="app.dupNav(-1)">‹ 上一组</button>
+          <button class="btn" onclick="app.dupNav(1)">下一组 ›</button>
+          <button class="btn danger" onclick="app.dupDelete()">删除本组选中索引</button>
+          <button class="btn danger" onclick="app.dupDeleteFiles()">删除本组选中作品（含文件）</button>
+          <span class="muted" id="dupPos">—</span>
+          <span class="muted" id="dupIgnored"></span>
+        </div>
+        <div id="dupList"></div>
+      </div>
+      <div class="c-sec">
         <h4>作品列表</h4>
         <div class="admin-search">
           <input id="mgQ" placeholder="模糊查询：索引ID / 作品名称 / 标签…" style="flex:1"
@@ -310,9 +338,9 @@
       </div>
     </div>
 
-    <!-- 扫描：路径引导 + 全盘防误操作 -->
+    <!-- 扫描：路径引导 + 全盘防误操作 + 两段式（扫描 → 人工确认 → 导入） -->
     <div class="admin-pane" id="ap-scan" style="display:none">
-      <p class="muted">扫描解析文件名并把海报 / 简评评分回填索引。全盘扫描按目录分块、可终止；也可只扫描指定路径文件夹。</p>
+      <p class="muted">扫描解析文件名与海报，产出「待导入清单」——<b>不会直接写库</b>；人工确认清单并点「导入到索引」后才入库。全盘扫描按目录分块、可终止；也可只扫描指定路径文件夹。</p>
       <div class="scan-guide">
         <b>如何获取文件夹路径：</b>
         <ol>
@@ -324,7 +352,7 @@
       </div>
       <div class="admin-search">
         <label class="field inline">分类
-          <select id="scanCategory" title="选择分类后，本次扫描到的作品会记入该分类">
+          <select id="scanCategory" title="扫描时可选「自动」；但「导入到索引」时必须选择具体分类（防呆）">
             <option value="">自动（按目录名）</option>
           </select>
         </label>
@@ -341,13 +369,29 @@
       <div class="bar" id="scanBar"><div id="barFill"></div></div>
       <pre id="scanResult"></pre>
       <div class="muted" id="scanProgressText">待机</div>
+
+      <div class="c-sec">
+        <h4>待导入清单（扫描 → 人工确认 → 导入）</h4>
+        <p class="muted">
+          这里列出「新增 / 有变化」的候选，确认无误后点「导入到索引」才会写入索引。<br>
+          【防呆】导入时必须选择具体分类——上方「分类」下拉若还是「自动（按目录名）」会被拒绝；
+          导入前会逐条二次校验文件仍在且未变化。清单只存于内存，服务重启后自动清空。
+        </p>
+        <div class="admin-search">
+          <button class="btn" onclick="app.loadStagedScan()">刷新清单</button>
+          <button class="btn primary" onclick="app.importStagedScan()">导入到索引</button>
+          <button class="btn danger" onclick="app.clearStagedScan()">放弃清单</button>
+          <span class="muted" id="stagedInfo">尚未扫描或已清空</span>
+        </div>
+        <div id="stagedList"></div>
+      </div>
     </div>
 
     <!-- 一键重启 -->
     <div class="admin-pane" id="ap-restart" style="display:none">
       <p class="warn">重启会使修改（配置 / 元数据）快速生效，但会导致当前会话短暂中断。请谨慎操作。</p>
-      <p>请输入确认文本 <code>__RESTART__</code> 以解锁：</p>
-      <input id="rConfirm" placeholder="__RESTART__">
+      <p>请输入确认文本<code>__RESTART__</code>以解锁：</p>
+      <input id="rConfirm" placeholder="__RESTART__" autocomplete="off" spellcheck="false">
       <div class="modal-actions">
         <button class="btn danger" onclick="app.adminRestart()">确认一键重启</button>
       </div>
@@ -410,11 +454,20 @@
       <button class="btn ghost x admin-close" onclick="app.closeManage()" title="关闭">✕</button>
     </div>
     <div class="admin-pane" id="mp-users">
-      <p class="muted">当前为只读列表；用户/用户组的增删改、组内权限与批量授权将随登录体系一并开放。</p>
-      <table id="userList" class="user-table">
-        <thead><tr><th>ID</th><th>名称</th><th>角色</th><th>创建时间</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <p class="muted">账号增删改查。默认登录账号（标「默认」）不可删除、不可降级为普通用户（避免失去管理权限）；
+        删除账号会同时清掉其观看状态 / 评分 / 收藏 / 备注，不影响作品与标签。</p>
+      <div class="admin-search">
+        <input id="userNewName" placeholder="新账号名（≤40 字）" maxlength="40" style="flex:1">
+        <label class="field inline">角色
+          <select id="userNewRole">
+            <option value="user">普通用户</option>
+            <option value="admin">管理员</option>
+          </select>
+        </label>
+        <button class="btn primary" onclick="app.createUser()">新增账号</button>
+      </div>
+      <div class="muted" id="userMsg">—</div>
+      <div id="userAdminList"></div>
     </div>
     <div class="admin-pane" id="mp-groups" style="display:none">
       <p class="muted">规划中：后续支持用户组创建、成员维护与按组授权。</p>
@@ -435,6 +488,31 @@
     <div class="modal-actions">
       <button class="btn ghost" onclick="app.closeTagDelete()">取消</button>
       <button class="btn danger" id="tdBtn" disabled onclick="app.tagDeleteConfirm()">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 个人中心：账号 / 每日签到 / 收藏夹 / 等级权益（预留） -->
+<div id="meModal" class="modal">
+  <div class="modal-card wide">
+    <h3>个人中心 <small class="muted">账号 · 每日签到 · 收藏夹</small></h3>
+    <div class="admin-tabs">
+      <button class="tab on" data-tab="profile" onclick="app.meTab('profile')">账号与签到</button>
+      <button class="tab" data-tab="fav" onclick="app.meTab('fav')">我的收藏</button>
+      <button class="tab" data-tab="perks" onclick="app.meTab('perks')">等级权益</button>
+      <button class="btn ghost x admin-close" onclick="app.closeMe()" title="关闭">✕</button>
+    </div>
+    <div class="admin-pane" id="me-profile"><div id="meCard" class="muted">加载中…</div></div>
+    <div class="admin-pane" id="me-fav" style="display:none">
+      <div class="muted" id="favInfo">—</div>
+      <div id="favGrid" class="fav-grid"></div>
+    </div>
+    <div class="admin-pane" id="me-perks" style="display:none">
+      <p class="muted">
+        等级由成长值决定：每日签到 <b>+10</b>，连续每满 7 天额外 <b>+20</b>；每 100 成长值升 1 级（上限 30 级）。<br>
+        下方是「等级权益」预留位：未来会按等级开放部分功能，当前尚未启用任何等级限制。
+      </p>
+      <div id="perkList"></div>
     </div>
   </div>
 </div>
